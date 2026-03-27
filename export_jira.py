@@ -3,79 +3,43 @@ import requests
 import pandas as pd
 from requests.auth import HTTPBasicAuth
 
-from office365.sharepoint.client_context import ClientContext
-from office365.runtime.auth.client_credential import ClientCredential
-
 
 # ==============================
-# REQUIRED ENV VARS (from GitHub Actions secrets)
+# JIRA ENV VARS
 # ==============================
-JIRA_BASE_URL = os.environ.get("JIRA_BASE_URL")
-JIRA_EMAIL = os.environ.get("JIRA_EMAIL")
-JIRA_API_TOKEN = os.environ.get("JIRA_API_TOKEN")
-
-SP_SITE_URL = os.environ.get("SP_SITE_URL")
-SP_CLIENT_ID = os.environ.get("SP_CLIENT_ID")
-SP_CLIENT_SECRET = os.environ.get("SP_CLIENT_SECRET")
-
-# IMPORTANT: server-relative URL to your library (internal urlName)
-# Example: /sites/Morse-helpdesk/jirapowerbidata
-SP_LIBRARY_RELATIVE_URL = os.environ.get("SP_LIBRARY_RELATIVE_URL")
-
-# Optional override so you can change JQL without changing code
-# Example: project = ISD ORDER BY created DESC
+JIRA_BASE_URL = os.environ["JIRA_BASE_URL"]
+JIRA_EMAIL = os.environ["JIRA_EMAIL"]
+JIRA_API_TOKEN = os.environ["JIRA_API_TOKEN"]
 JIRA_JQL = os.environ.get("JIRA_JQL", "project = ISD ORDER BY created DESC")
 
-
-# ==============================
-# VALIDATE ENV VARS EARLY
-# ==============================
-required = {
-    "JIRA_BASE_URL": JIRA_BASE_URL,
-    "JIRA_EMAIL": JIRA_EMAIL,
-    "JIRA_API_TOKEN": JIRA_API_TOKEN,
-    "SP_SITE_URL": SP_SITE_URL,
-    "SP_CLIENT_ID": SP_CLIENT_ID,
-    "SP_CLIENT_SECRET": SP_CLIENT_SECRET,
-    "SP_LIBRARY_RELATIVE_URL": SP_LIBRARY_RELATIVE_URL,
-}
-missing = [k for k, v in required.items() if not v]
-if missing:
-    raise Exception(f"Missing required environment variables: {missing}")
+FIELDS = ["summary", "status", "created", "resolutiondate", "assignee", "issuetype"]
 
 
 # ==============================
-# JIRA SETTINGS (JQL SEARCH)
-# /rest/api/3/search/jql with nextPageToken pagination
+# SHAREPOINT (GRAPH) ENV VARS
 # ==============================
-JIRA_HEADERS = {"Accept": "application/json"}
+SP_TENANT_ID = os.environ["SP_TENANT_ID"]
+SP_CLIENT_ID = os.environ["SP_CLIENT_ID"]
+SP_CLIENT_SECRET = os.environ["SP_CLIENT_SECRET"]
 
-FIELDS = [
-    "summary",
-    "status",
-    "created",
-    "resolutiondate",
-    "assignee",
-    "issuetype",
-]
+SP_SITE_HOSTNAME = os.environ["SP_SITE_HOSTNAME"]     # e.g. itsmorse.sharepoint.com
+SP_SITE_PATH = os.environ["SP_SITE_PATH"]             # e.g. /sites/Morse-helpdesk
+SP_LIBRARY_NAME = os.environ["SP_LIBRARY_NAME"]       # e.g. jira-powerbi-data
 
 
+# ==============================
+# JIRA: Fetch issues (JQL search endpoint)
+# ==============================
 def fetch_jira_issues():
-    """
-    Jira Cloud JQL search:
-    GET /rest/api/3/search/jql
-    Pagination uses nextPageToken (not startAt).
-    """
     print("Starting Jira export using /rest/api/3/search/jql (nextPageToken pagination)...")
 
     all_issues = []
     next_page_token = None
-    max_results = 100
 
     while True:
         params = {
             "jql": JIRA_JQL,
-            "maxResults": max_results,
+            "maxResults": 100,
             "fields": ",".join(FIELDS),
         }
         if next_page_token:
@@ -84,24 +48,17 @@ def fetch_jira_issues():
         r = requests.get(
             f"{JIRA_BASE_URL}/rest/api/3/search/jql",
             auth=HTTPBasicAuth(JIRA_EMAIL, JIRA_API_TOKEN),
-            headers=JIRA_HEADERS,
+            headers={"Accept": "application/json"},
             params=params,
         )
 
         print(f"Jira HTTP: {r.status_code}")
         if r.status_code != 200:
-            print("Jira API error response:")
             print(r.text)
             raise Exception("Jira API call failed")
 
         data = r.json()
-
-        issues = data.get("issues")
-        if issues is None:
-            print("Unexpected Jira response (no 'issues'):")
-            print(data)
-            raise Exception("Jira response does not contain 'issues'")
-
+        issues = data.get("issues", [])
         all_issues.extend(issues)
 
         next_page_token = data.get("nextPageToken")
@@ -128,23 +85,73 @@ def issues_to_dataframe(issues):
     return pd.DataFrame(rows)
 
 
-def upload_csv_to_sharepoint(local_csv_path, sharepoint_filename="jira_jsm_export.csv"):
-    """
-    Deterministic upload using server-relative library path, e.g.
-    /sites/Morse-helpdesk/jirapowerbidata
-    """
-    print("Uploading CSV to SharePoint (server-relative path)...")
-    creds = ClientCredential(SP_CLIENT_ID, SP_CLIENT_SECRET)
-    ctx = ClientContext(SP_SITE_URL).with_credentials(creds)  # supported auth pattern [3](https://www.data-traveling.com/articles/leveraging-power-bi-rest-apis-python-automation-for-dataset-refresh-and-ms-teams-notification)
+# ==============================
+# GRAPH AUTH
+# ==============================
+def get_graph_token():
+    token_url = f"https://login.microsoftonline.com/{SP_TENANT_ID}/oauth2/v2.0/token"
+    data = {
+        "client_id": SP_CLIENT_ID,
+        "client_secret": SP_CLIENT_SECRET,
+        "grant_type": "client_credentials",
+        "scope": "https://graph.microsoft.com/.default",
+    }
+    r = requests.post(token_url, data=data)
+    if r.status_code != 200:
+        print("Token error:", r.text)
+        raise Exception("Failed to get Graph token")
+    return r.json()["access_token"]
 
-    folder = ctx.web.get_folder_by_server_relative_url(SP_LIBRARY_RELATIVE_URL)
 
-    with open(local_csv_path, "rb") as f:
-        uploaded = folder.files.upload(sharepoint_filename, f.read()).execute_query()  # supported upload style [4](https://pbi-guy.com/2022/01/07/refresh-a-power-bi-dataset-with-python/)
+def graph_get_site_id(token):
+    # GET /sites/{hostname}:{server-relative-path}
+    url = f"https://graph.microsoft.com/v1.0/sites/{SP_SITE_HOSTNAME}:{SP_SITE_PATH}"
+    r = requests.get(url, headers={"Authorization": f"Bearer {token}"})
+    if r.status_code != 200:
+        print("Site lookup error:", r.text)
+        raise Exception("Failed to resolve SharePoint site via Graph")
+    return r.json()["id"]
 
-    print("✅ Uploaded to:", uploaded.serverRelativeUrl)
+
+def graph_get_drive_id(token, site_id):
+    # List drives (document libraries) and pick the one matching SP_LIBRARY_NAME
+    url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drives"
+    r = requests.get(url, headers={"Authorization": f"Bearer {token}"})
+    if r.status_code != 200:
+        print("Drives lookup error:", r.text)
+        raise Exception("Failed to list drives for site")
+
+    drives = r.json().get("value", [])
+    for d in drives:
+        if d.get("name") == SP_LIBRARY_NAME:
+            return d["id"]
+
+    # If not found, print what we saw for debugging
+    print("Available drives:", [d.get("name") for d in drives])
+    raise Exception(f"Drive/library not found: {SP_LIBRARY_NAME}")
 
 
+def graph_upload_file(token, drive_id, local_path, target_name):
+    # PUT /drives/{drive-id}/root:/{filename}:/content
+    upload_url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root:/{target_name}:/content"
+    with open(local_path, "rb") as f:
+        r = requests.put(
+            upload_url,
+            headers={"Authorization": f"Bearer {token}"},
+            data=f
+        )
+
+    if r.status_code not in (200, 201):
+        print("Upload error:", r.text)
+        raise Exception("Graph upload failed")
+
+    uploaded = r.json()
+    print("✅ Uploaded to:", uploaded.get("webUrl"))
+
+
+# ==============================
+# MAIN
+# ==============================
 if __name__ == "__main__":
     issues = fetch_jira_issues()
     df = issues_to_dataframe(issues)
@@ -157,4 +164,7 @@ if __name__ == "__main__":
     csv_name = "jira_jsm_export.csv"
     df.to_csv(csv_name, index=False)
 
-    upload_csv_to_sharepoint(csv_name, sharepoint_filename=csv_name)
+    token = get_graph_token()
+    site_id = graph_get_site_id(token)
+    drive_id = graph_get_drive_id(token, site_id)
+    graph_upload_file(token, drive_id, csv_name, csv_name)
