@@ -18,7 +18,7 @@ SP_CLIENT_SECRET = os.environ.get("SP_CLIENT_SECRET")
 SP_LIBRARY = os.environ.get("SP_LIBRARY")
 
 # ==============================
-# VALIDATE ENV VARS EARLY
+# VALIDATE ENV VARS
 # ==============================
 required_vars = {
     "JIRA_BASE_URL": JIRA_BASE_URL,
@@ -54,40 +54,41 @@ HEADERS = {
 }
 
 # ==============================
-# FETCH JIRA DATA (SAFE)
+# FETCH JIRA DATA (NEW API)
 # ==============================
 def fetch_jira():
-    print("Starting Jira export...")
+    print("Starting Jira export (new /search/jql API)...")
+
     issues = []
     start_at = 0
     max_results = 100
 
     while True:
-        response = requests.get(
-            f"{JIRA_BASE_URL}/rest/api/3/search",
+        payload = {
+            "jql": JQL,
+            "startAt": start_at,
+            "maxResults": max_results,
+            "fields": FIELDS,
+        }
+
+        response = requests.post(
+            f"{JIRA_BASE_URL}/rest/api/3/search/jql",
             auth=HTTPBasicAuth(JIRA_EMAIL, JIRA_API_TOKEN),
             headers=HEADERS,
-            params={
-                "jql": JQL,
-                "startAt": start_at,
-                "maxResults": max_results,
-                "fields": ",".join(FIELDS),
-            },
+            json=payload,
         )
 
         print(f"HTTP {response.status_code}")
 
-        # ✅ HARD FAIL ON HTTP ERRORS
         if response.status_code != 200:
-            print("Jira API returned error:")
+            print("Jira API error:")
             print(response.text)
             raise Exception("Jira API call failed")
 
         data = response.json()
 
-        # ✅ HANDLE JIRA ERROR PAYLOADS
         if "issues" not in data:
-            print("Unexpected Jira response (no 'issues'):")
+            print("Unexpected Jira response:")
             print(data)
             raise Exception("Jira response does not contain 'issues'")
 
@@ -120,6 +121,7 @@ def fetch_jira():
 # ==============================
 def upload_to_sharepoint(df):
     print("Uploading CSV to SharePoint...")
+
     csv_name = "jira_jsm_export.csv"
     df.to_csv(csv_name, index=False)
 
@@ -143,8 +145,8 @@ if __name__ == "__main__":
     df = fetch_jira()
 
     if df.empty:
-        print("WARNING: Jira returned 0 issues (dataset will be empty)")
+        print("WARNING: Jira returned 0 issues")
     else:
-        print(f"Exporting {len(df)} rows")
+        print(f"Exporting {len(df)} issues")
 
     upload_to_sharepoint(df)
