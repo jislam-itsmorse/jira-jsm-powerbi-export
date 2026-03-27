@@ -18,7 +18,7 @@ SP_CLIENT_SECRET = os.environ.get("SP_CLIENT_SECRET")
 SP_LIBRARY = os.environ.get("SP_LIBRARY")
 
 # ==============================
-# VALIDATE ENV VARS
+# VALIDATE ENV VARS EARLY
 # ==============================
 required_vars = {
     "JIRA_BASE_URL": JIRA_BASE_URL,
@@ -29,7 +29,6 @@ required_vars = {
     "SP_CLIENT_SECRET": SP_CLIENT_SECRET,
     "SP_LIBRARY": SP_LIBRARY,
 }
-
 missing = [k for k, v in required_vars.items() if not v]
 if missing:
     raise Exception(f"Missing required environment variables: {missing}")
@@ -37,8 +36,10 @@ if missing:
 # ==============================
 # JIRA SETTINGS
 # ==============================
+# Keep this simple first. Once it works, you can add more filters.
 JQL = 'project = ISD ORDER BY created DESC'
 
+# Fields you want back (key is always included in issue objects)
 FIELDS = [
     "summary",
     "status",
@@ -50,68 +51,73 @@ FIELDS = [
 
 HEADERS = {
     "Accept": "application/json",
-    "Content-Type": "application/json",
 }
 
 # ==============================
-# FETCH JIRA DATA (NEW API)
+# FETCH JIRA DATA (NEW JQL SEARCH)
+# - Uses GET /rest/api/3/search/jql
+# - Pagination uses nextPageToken (NOT startAt)
 # ==============================
 def fetch_jira():
-    print("Starting Jira export (new /search/jql API)...")
+    print("Starting Jira export using /rest/api/3/search/jql (nextPageToken pagination)...")
 
     issues = []
-    start_at = 0
+    next_page_token = None
     max_results = 100
 
     while True:
-        payload = {
+        params = {
             "jql": JQL,
-            "startAt": start_at,
             "maxResults": max_results,
-            "fields": FIELDS,
+            # For GET /search/jql, fields are passed as a query parameter.
+            # Using comma-separated list is the common pattern for Jira search endpoints.
+            "fields": ",".join(FIELDS),
         }
+        if next_page_token:
+            params["nextPageToken"] = next_page_token
 
-        response = requests.post(
+        resp = requests.get(
             f"{JIRA_BASE_URL}/rest/api/3/search/jql",
             auth=HTTPBasicAuth(JIRA_EMAIL, JIRA_API_TOKEN),
             headers=HEADERS,
-            json=payload,
+            params=params,
         )
 
-        print(f"HTTP {response.status_code}")
-
-        if response.status_code != 200:
-            print("Jira API error:")
-            print(response.text)
+        print(f"HTTP {resp.status_code}")
+        if resp.status_code != 200:
+            print("Jira API error response:")
+            print(resp.text)
             raise Exception("Jira API call failed")
 
-        data = response.json()
+        data = resp.json()
 
-        if "issues" not in data:
-            print("Unexpected Jira response:")
+        # Defensive checks: new endpoint still returns issues, but never assume.
+        batch = data.get("issues")
+        if batch is None:
+            print("Unexpected Jira response (no 'issues' key):")
             print(data)
             raise Exception("Jira response does not contain 'issues'")
 
-        issues.extend(data["issues"])
+        issues.extend(batch)
 
-        if start_at + max_results >= data.get("total", 0):
+        # New pagination mechanism
+        next_page_token = data.get("nextPageToken")
+        if not next_page_token:
             break
-
-        start_at += max_results
 
     print(f"Fetched {len(issues)} issues")
 
     rows = []
-    for i in issues:
-        f = i["fields"]
+    for issue in issues:
+        f = issue.get("fields", {})
         rows.append({
-            "IssueKey": i["key"],
+            "IssueKey": issue.get("key"),
             "Summary": f.get("summary"),
-            "Status": f["status"]["name"] if f.get("status") else None,
+            "Status": (f.get("status") or {}).get("name"),
             "CreatedDate": f.get("created"),
             "ResolvedDate": f.get("resolutiondate"),
-            "Assignee": f["assignee"]["displayName"] if f.get("assignee") else None,
-            "IssueType": f["issuetype"]["name"] if f.get("issuetype") else None,
+            "Assignee": (f.get("assignee") or {}).get("displayName"),
+            "IssueType": (f.get("issuetype") or {}).get("name"),
         })
 
     return pd.DataFrame(rows)
@@ -143,10 +149,9 @@ def upload_to_sharepoint(df):
 # ==============================
 if __name__ == "__main__":
     df = fetch_jira()
-
     if df.empty:
-        print("WARNING: Jira returned 0 issues")
+        print("WARNING: Jira returned 0 issues (CSV will be empty)")
     else:
-        print(f"Exporting {len(df)} issues")
+        print(f"Exporting {len(df)} rows to CSV")
 
     upload_to_sharepoint(df)
