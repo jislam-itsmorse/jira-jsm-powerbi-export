@@ -2,6 +2,7 @@ import os
 import requests
 import pandas as pd
 from requests.auth import HTTPBasicAuth
+
 from office365.sharepoint.client_context import ClientContext
 from office365.runtime.auth.client_credential import ClientCredential
 
@@ -16,6 +17,10 @@ SP_SITE_URL = os.environ.get("SP_SITE_URL")
 SP_CLIENT_ID = os.environ.get("SP_CLIENT_ID")
 SP_CLIENT_SECRET = os.environ.get("SP_CLIENT_SECRET")
 SP_LIBRARY = os.environ.get("SP_LIBRARY")
+
+# Optional: override JQL from GitHub Secrets/Env if you want
+# Example value: project = ISD ORDER BY created DESC
+JIRA_JQL_OVERRIDE = os.environ.get("JIRA_JQL")
 
 # ==============================
 # VALIDATE ENV VARS EARLY
@@ -36,10 +41,10 @@ if missing:
 # ==============================
 # JIRA SETTINGS
 # ==============================
-# Keep this simple first. Once it works, you can add more filters.
-JQL = 'project = ISD ORDER BY created DESC'
+# Keep this simple first. If Jira returns 0, verify this same JQL in Jira UI.
+JQL = JIRA_JQL_OVERRIDE or 'project = ISD ORDER BY created DESC'
 
-# Fields you want back (key is always included in issue objects)
+# Fields to return
 FIELDS = [
     "summary",
     "status",
@@ -49,14 +54,13 @@ FIELDS = [
     "issuetype",
 ]
 
-HEADERS = {
-    "Accept": "application/json",
-}
+JIRA_HEADERS = {"Accept": "application/json"}
+
 
 # ==============================
 # FETCH JIRA DATA (NEW JQL SEARCH)
-# - Uses GET /rest/api/3/search/jql
-# - Pagination uses nextPageToken (NOT startAt)
+# Endpoint: GET /rest/api/3/search/jql
+# Pagination: nextPageToken (NOT startAt)
 # ==============================
 def fetch_jira():
     print("Starting Jira export using /rest/api/3/search/jql (nextPageToken pagination)...")
@@ -69,8 +73,6 @@ def fetch_jira():
         params = {
             "jql": JQL,
             "maxResults": max_results,
-            # For GET /search/jql, fields are passed as a query parameter.
-            # Using comma-separated list is the common pattern for Jira search endpoints.
             "fields": ",".join(FIELDS),
         }
         if next_page_token:
@@ -79,11 +81,12 @@ def fetch_jira():
         resp = requests.get(
             f"{JIRA_BASE_URL}/rest/api/3/search/jql",
             auth=HTTPBasicAuth(JIRA_EMAIL, JIRA_API_TOKEN),
-            headers=HEADERS,
+            headers=JIRA_HEADERS,
             params=params,
         )
 
         print(f"HTTP {resp.status_code}")
+
         if resp.status_code != 200:
             print("Jira API error response:")
             print(resp.text)
@@ -91,7 +94,6 @@ def fetch_jira():
 
         data = resp.json()
 
-        # Defensive checks: new endpoint still returns issues, but never assume.
         batch = data.get("issues")
         if batch is None:
             print("Unexpected Jira response (no 'issues' key):")
@@ -100,16 +102,18 @@ def fetch_jira():
 
         issues.extend(batch)
 
-        # New pagination mechanism
         next_page_token = data.get("nextPageToken")
         if not next_page_token:
             break
 
     print(f"Fetched {len(issues)} issues")
+    return issues
 
+
+def issues_to_dataframe(issues):
     rows = []
     for issue in issues:
-        f = issue.get("fields", {})
+        f = issue.get("fields", {}) or {}
         rows.append({
             "IssueKey": issue.get("key"),
             "Summary": f.get("summary"),
@@ -122,36 +126,14 @@ def fetch_jira():
 
     return pd.DataFrame(rows)
 
+
 # ==============================
 # UPLOAD TO SHAREPOINT
+# Fixes: ClientCredential url attribute error by using with_credentials()
+# Auth pattern: ClientContext(site_url).with_credentials(ClientCredential(...))
+# Upload pattern: folder.files.upload(f).execute_query()
 # ==============================
-def upload_to_sharepoint(df):
+def upload_to_sharepoint(csv_path, target_filename="jira_jsm_export.csv"):
     print("Uploading CSV to SharePoint...")
 
-    csv_name = "jira_jsm_export.csv"
-    df.to_csv(csv_name, index=False)
-
-    ctx = ClientContext(
-        SP_SITE_URL,
-        ClientCredential(SP_CLIENT_ID, SP_CLIENT_SECRET)
-    )
-
-    with open(csv_name, "rb") as content:
-        ctx.web.lists.get_by_title(SP_LIBRARY) \
-            .root_folder \
-            .upload_file(csv_name, content.read()) \
-            .execute_query()
-
-    print("Upload completed successfully")
-
-# ==============================
-# MAIN
-# ==============================
-if __name__ == "__main__":
-    df = fetch_jira()
-    if df.empty:
-        print("WARNING: Jira returned 0 issues (CSV will be empty)")
-    else:
-        print(f"Exporting {len(df)} rows to CSV")
-
-    upload_to_sharepoint(df)
+    client_credentials = ClientCredential(SP_CLIENT_ID, SP_CLIENT_SECRET)
