@@ -1,14 +1,20 @@
 name: Jira JSM Export to SharePoint
 
 on:
+  # Daily run at 02:00 UTC
   schedule:
-    # Runs every day at 02:00 UTC
     - cron: "0 2 * * *"
+
+  # Allow manual run from GitHub UI
   workflow_dispatch:
 
 jobs:
   export-jira:
     runs-on: ubuntu-latest
+
+    # Force GitHub Actions to use Node.js 24
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout repository
@@ -24,14 +30,26 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Optional: safe debug check (does NOT expose secrets)
+      - name: Debug required secrets
+        run: |
+          echo "JIRA_BASE_URL set: ${{ secrets.JIRA_BASE_URL != '' }}"
+          echo "JIRA_EMAIL set: ${{ secrets.JIRA_EMAIL != '' }}"
+          echo "JIRA_API_TOKEN set: ${{ secrets.JIRA_API_TOKEN != '' }}"
+          echo "SP_SITE_URL set: ${{ secrets.SP_SITE_URL != '' }}"
+          echo "SP_LIBRARY set: ${{ secrets.SP_LIBRARY != '' }}"
+
       - name: Run Jira export script
         env:
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+
           SP_SITE_URL: ${{ secrets.SP_SITE_URL }}
           SP_CLIENT_ID: ${{ secrets.SP_CLIENT_ID }}
           SP_CLIENT_SECRET: ${{ secrets.SP_CLIENT_SECRET }}
           SP_LIBRARY: ${{ secrets.SP_LIBRARY }}
+
         run: |
           python export_jira.py
+``
