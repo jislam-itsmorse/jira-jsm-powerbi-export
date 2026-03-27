@@ -10,21 +10,38 @@ from requests.auth import HTTPBasicAuth
 JIRA_BASE_URL = os.environ["JIRA_BASE_URL"]
 JIRA_EMAIL = os.environ["JIRA_EMAIL"]
 JIRA_API_TOKEN = os.environ["JIRA_API_TOKEN"]
-JIRA_JQL = os.environ.get(
-    "JIRA_JQL",
-    """
-    project = ISD
-    AND (
-        created >= startOfWeek()
-        OR
-        resolutiondate >= startOfWeek()
-    )
-    ORDER BY created ASC
-    """
-)
 
+FIELDS = [
+    "summary",
+    "status",
+    "created",
+    "resolutiondate",
+    "assignee",
+    "issuetype"
+]
 
-FIELDS = ["summary", "status", "created", "resolutiondate", "assignee", "issuetype"]
+# ==============================
+# JIRA JQL QUERIES (3 SEPARATE EXPORTS)
+# ==============================
+JIRA_QUERIES = {
+    "requested_tickets.csv": """
+        project = ISD
+        AND created >= startOfWeek()
+        ORDER BY created ASC
+    """,
+
+    "resolved_tickets.csv": """
+        project = ISD
+        AND resolutiondate >= startOfWeek()
+        ORDER BY resolutiondate ASC
+    """,
+
+    "open_tickets.csv": """
+        project = ISD
+        AND resolution = EMPTY
+        ORDER BY created ASC
+    """
+}
 
 
 # ==============================
@@ -42,15 +59,16 @@ SP_LIBRARY_NAME = os.environ["SP_LIBRARY_NAME"]       # e.g. jira-powerbi-data
 # ==============================
 # JIRA: Fetch issues (JQL search endpoint)
 # ==============================
-def fetch_jira_issues():
-    print("Starting Jira export using /rest/api/3/search/jql (nextPageToken pagination)...")
+def fetch_jira_issues(jql):
+    print("Starting Jira export...")
+    print(jql.strip())
 
     all_issues = []
     next_page_token = None
 
     while True:
         params = {
-            "jql": JIRA_JQL,
+            "jql": jql,
             "maxResults": 100,
             "fields": ",".join(FIELDS),
         }
@@ -70,10 +88,9 @@ def fetch_jira_issues():
             raise Exception("Jira API call failed")
 
         data = r.json()
-        issues = data.get("issues", [])
-        all_issues.extend(issues)
-
+        all_issues.extend(data.get("issues", []))
         next_page_token = data.get("nextPageToken")
+
         if not next_page_token:
             break
 
@@ -116,35 +133,29 @@ def get_graph_token():
 
 
 def graph_get_site_id(token):
-    # GET /sites/{hostname}:{server-relative-path}
     url = f"https://graph.microsoft.com/v1.0/sites/{SP_SITE_HOSTNAME}:{SP_SITE_PATH}"
     r = requests.get(url, headers={"Authorization": f"Bearer {token}"})
     if r.status_code != 200:
         print("Site lookup error:", r.text)
-        raise Exception("Failed to resolve SharePoint site via Graph")
+        raise Exception("Failed to resolve SharePoint site")
     return r.json()["id"]
 
 
 def graph_get_drive_id(token, site_id):
-    # List drives (document libraries) and pick the one matching SP_LIBRARY_NAME
     url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drives"
     r = requests.get(url, headers={"Authorization": f"Bearer {token}"})
     if r.status_code != 200:
         print("Drives lookup error:", r.text)
-        raise Exception("Failed to list drives for site")
+        raise Exception("Failed to list drives")
 
-    drives = r.json().get("value", [])
-    for d in drives:
+    for d in r.json().get("value", []):
         if d.get("name") == SP_LIBRARY_NAME:
             return d["id"]
 
-    # If not found, print what we saw for debugging
-    print("Available drives:", [d.get("name") for d in drives])
-    raise Exception(f"Drive/library not found: {SP_LIBRARY_NAME}")
+    raise Exception(f"Drive not found: {SP_LIBRARY_NAME}")
 
 
 def graph_upload_file(token, drive_id, local_path, target_name):
-    # PUT /drives/{drive-id}/root:/{filename}:/content
     upload_url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root:/{target_name}:/content"
     with open(local_path, "rb") as f:
         r = requests.put(
@@ -157,26 +168,27 @@ def graph_upload_file(token, drive_id, local_path, target_name):
         print("Upload error:", r.text)
         raise Exception("Graph upload failed")
 
-    uploaded = r.json()
-    print("✅ Uploaded to:", uploaded.get("webUrl"))
+    print("✅ Uploaded:", target_name)
 
 
 # ==============================
 # MAIN
 # ==============================
 if __name__ == "__main__":
-    issues = fetch_jira_issues()
-    df = issues_to_dataframe(issues)
-
-    if df.empty:
-        print("WARNING: Jira returned 0 issues (CSV will be empty)")
-    else:
-        print(f"Exporting {len(df)} rows")
-
-    csv_name = "jira_jsm_export.csv"
-    df.to_csv(csv_name, index=False)
-
     token = get_graph_token()
     site_id = graph_get_site_id(token)
     drive_id = graph_get_drive_id(token, site_id)
-    graph_upload_file(token, drive_id, csv_name, csv_name)
+
+    for csv_name, jql in JIRA_QUERIES.items():
+        print(f"\n=== Exporting {csv_name} ===")
+
+        issues = fetch_jira_issues(jql)
+        df = issues_to_dataframe(issues)
+
+        if df.empty:
+            print(f"WARNING: {csv_name} is empty")
+        else:
+            print(f"Writing {len(df)} rows")
+
+        df.to_csv(csv_name, index=False)
+        graph_upload_file(token, drive_id, csv_name, csv_name)
