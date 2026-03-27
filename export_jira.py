@@ -9,42 +9,20 @@ from office365.runtime.auth.client_credential import ClientCredential
 # ==============================
 # ENVIRONMENT VARIABLES
 # ==============================
-JIRA_BASE_URL = os.environ.get("JIRA_BASE_URL")
-JIRA_EMAIL = os.environ.get("JIRA_EMAIL")
-JIRA_API_TOKEN = os.environ.get("JIRA_API_TOKEN")
+JIRA_BASE_URL = os.environ["JIRA_BASE_URL"]
+JIRA_EMAIL = os.environ["JIRA_EMAIL"]
+JIRA_API_TOKEN = os.environ["JIRA_API_TOKEN"]
 
-SP_SITE_URL = os.environ.get("SP_SITE_URL")
-SP_CLIENT_ID = os.environ.get("SP_CLIENT_ID")
-SP_CLIENT_SECRET = os.environ.get("SP_CLIENT_SECRET")
-SP_LIBRARY = os.environ.get("SP_LIBRARY")
+SP_SITE_URL = os.environ["SP_SITE_URL"]
+SP_CLIENT_ID = os.environ["SP_CLIENT_ID"]
+SP_CLIENT_SECRET = os.environ["SP_CLIENT_SECRET"]
 
-# Optional: override JQL from GitHub Secrets/Env if you want
-# Example value: project = ISD ORDER BY created DESC
-JIRA_JQL_OVERRIDE = os.environ.get("JIRA_JQL")
+# ✅ NEW — deterministic upload target
+SP_LIBRARY_RELATIVE_URL = os.environ["SP_LIBRARY_RELATIVE_URL"]
 
-# ==============================
-# VALIDATE ENV VARS EARLY
-# ==============================
-required_vars = {
-    "JIRA_BASE_URL": JIRA_BASE_URL,
-    "JIRA_EMAIL": JIRA_EMAIL,
-    "JIRA_API_TOKEN": JIRA_API_TOKEN,
-    "SP_SITE_URL": SP_SITE_URL,
-    "SP_CLIENT_ID": SP_CLIENT_ID,
-    "SP_CLIENT_SECRET": SP_CLIENT_SECRET,
-    "SP_LIBRARY": SP_LIBRARY,
-}
-missing = [k for k, v in required_vars.items() if not v]
-if missing:
-    raise Exception(f"Missing required environment variables: {missing}")
+# Optional override
+JQL = os.environ.get("JIRA_JQL", "project = ISD ORDER BY created DESC")
 
-# ==============================
-# JIRA SETTINGS
-# ==============================
-# Keep this simple first. If Jira returns 0, verify this same JQL in Jira UI.
-JQL = JIRA_JQL_OVERRIDE or 'project = ISD ORDER BY created DESC'
-
-# Fields to return
 FIELDS = [
     "summary",
     "status",
@@ -54,55 +32,40 @@ FIELDS = [
     "issuetype",
 ]
 
-JIRA_HEADERS = {"Accept": "application/json"}
-
-
 # ==============================
-# FETCH JIRA DATA (NEW JQL SEARCH)
-# Endpoint: GET /rest/api/3/search/jql
-# Pagination: nextPageToken (NOT startAt)
+# FETCH JIRA DATA
 # ==============================
 def fetch_jira():
-    print("Starting Jira export using /rest/api/3/search/jql (nextPageToken pagination)...")
+    print("Starting Jira export (stable JQL endpoint)...")
 
     issues = []
     next_page_token = None
-    max_results = 100
 
     while True:
         params = {
             "jql": JQL,
-            "maxResults": max_results,
-            "fields": ",".join(FIELDS),
+            "maxResults": 100,
+            "fields": ",".join(FIELDS)
         }
         if next_page_token:
             params["nextPageToken"] = next_page_token
 
-        resp = requests.get(
+        r = requests.get(
             f"{JIRA_BASE_URL}/rest/api/3/search/jql",
             auth=HTTPBasicAuth(JIRA_EMAIL, JIRA_API_TOKEN),
-            headers=JIRA_HEADERS,
-            params=params,
+            headers={"Accept": "application/json"},
+            params=params
         )
 
-        print(f"HTTP {resp.status_code}")
+        print("Jira HTTP:", r.status_code)
+        if r.status_code != 200:
+            print(r.text)
+            raise Exception("Jira API failed")
 
-        if resp.status_code != 200:
-            print("Jira API error response:")
-            print(resp.text)
-            raise Exception("Jira API call failed")
-
-        data = resp.json()
-
-        batch = data.get("issues")
-        if batch is None:
-            print("Unexpected Jira response (no 'issues' key):")
-            print(data)
-            raise Exception("Jira response does not contain 'issues'")
-
-        issues.extend(batch)
-
+        data = r.json()
+        issues.extend(data.get("issues", []))
         next_page_token = data.get("nextPageToken")
+
         if not next_page_token:
             break
 
@@ -110,12 +73,12 @@ def fetch_jira():
     return issues
 
 
-def issues_to_dataframe(issues):
+def to_dataframe(issues):
     rows = []
-    for issue in issues:
-        f = issue.get("fields", {}) or {}
+    for i in issues:
+        f = i.get("fields", {})
         rows.append({
-            "IssueKey": issue.get("key"),
+            "IssueKey": i.get("key"),
             "Summary": f.get("summary"),
             "Status": (f.get("status") or {}).get("name"),
             "CreatedDate": f.get("created"),
@@ -123,17 +86,40 @@ def issues_to_dataframe(issues):
             "Assignee": (f.get("assignee") or {}).get("displayName"),
             "IssueType": (f.get("issuetype") or {}).get("name"),
         })
-
     return pd.DataFrame(rows)
 
 
 # ==============================
-# UPLOAD TO SHAREPOINT
-# Fixes: ClientCredential url attribute error by using with_credentials()
-# Auth pattern: ClientContext(site_url).with_credentials(ClientCredential(...))
-# Upload pattern: folder.files.upload(f).execute_query()
+# UPLOAD TO SHAREPOINT (BULLETPROOF)
 # ==============================
-def upload_to_sharepoint(csv_path, target_filename="jira_jsm_export.csv"):
-    print("Uploading CSV to SharePoint...")
-    client_credentials = ClientCredential(SP_CLIENT_ID, SP_CLIENT_SECRET)
-    print("Uploaded to:", uploaded_file.serverRelativeUrl)
+def upload_to_sharepoint(csv_path):
+    print("Uploading to SharePoint (server-relative path)...")
+
+    creds = ClientCredential(SP_CLIENT_ID, SP_CLIENT_SECRET)
+    ctx = ClientContext(SP_SITE_URL).with_credentials(creds)
+
+    # ✅ THIS IS THE KEY FIX
+    folder = ctx.web.get_folder_by_server_relative_url(
+        SP_LIBRARY_RELATIVE_URL
+    )
+
+    with open(csv_path, "rb") as f:
+        uploaded = folder.files.upload(
+            "jira_jsm_export.csv",
+            f.read()
+        ).execute_query()
+
+    print("✅ Uploaded to:", uploaded.serverRelativeUrl)
+
+
+# ==============================
+# MAIN
+# ==============================
+if __name__ == "__main__":
+    issues = fetch_jira()
+    df = to_dataframe(issues)
+
+    csv_name = "jira_jsm_export.csv"
+    df.to_csv(csv_name, index=False)
+
+    upload_to_sharepoint(csv_name)
