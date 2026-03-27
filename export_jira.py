@@ -10,7 +10,7 @@ from requests.auth import HTTPBasicAuth
 JIRA_BASE_URL = os.environ["JIRA_BASE_URL"]
 JIRA_EMAIL = os.environ["JIRA_EMAIL"]
 JIRA_API_TOKEN = os.environ["JIRA_API_TOKEN"]
-JIRA_JQL = os.environ.get("JIRA_JQL", "project = ISD ORDER BY created DESC")
+JIRA_JQL = os.environ.get("JIRA_JQL", "project = ISD ORDER BY updated DESC")
 
 FIELDS = ["summary", "status", "created", "resolutiondate", "assignee", "issuetype"]
 
