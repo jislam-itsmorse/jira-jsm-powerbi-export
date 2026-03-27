@@ -135,5 +135,5 @@ def issues_to_dataframe(issues):
 # ==============================
 def upload_to_sharepoint(csv_path, target_filename="jira_jsm_export.csv"):
     print("Uploading CSV to SharePoint...")
-
     client_credentials = ClientCredential(SP_CLIENT_ID, SP_CLIENT_SECRET)
+    print("Uploaded to:", uploaded_file.serverRelativeUrl)
