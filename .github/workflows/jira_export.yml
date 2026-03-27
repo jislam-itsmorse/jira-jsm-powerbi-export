@@ -1,18 +1,14 @@
 name: Jira JSM Export to SharePoint
 
 on:
-  # Daily run at 02:00 UTC
   schedule:
-    - cron: "0 2 * * *"
-
-  # Allow manual run from GitHub UI
+    - cron: "0 2 * * *"   # daily 02:00 UTC
   workflow_dispatch:
 
 jobs:
   export-jira:
     runs-on: ubuntu-latest
 
-    # Force GitHub Actions to use Node.js 24
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -25,21 +21,17 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install Python dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Optional: safe debug check (does NOT expose secrets)
-      - name: Debug required secrets
+      # This confirms the secret exists (does NOT print its value)
+      - name: Debug required env
         run: |
-          echo "JIRA_BASE_URL set: ${{ secrets.JIRA_BASE_URL != '' }}"
-          echo "JIRA_EMAIL set: ${{ secrets.JIRA_EMAIL != '' }}"
-          echo "JIRA_API_TOKEN set: ${{ secrets.JIRA_API_TOKEN != '' }}"
-          echo "SP_SITE_URL set: ${{ secrets.SP_SITE_URL != '' }}"
-          echo "SP_LIBRARY set: ${{ secrets.SP_LIBRARY != '' }}"
+          echo "SP_LIBRARY_RELATIVE_URL is set? -> ${{ secrets.SP_LIBRARY_RELATIVE_URL != '' }}"
 
-      - name: Run Jira export script
+      - name: Run export
         env:
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
@@ -48,7 +40,12 @@ jobs:
           SP_SITE_URL: ${{ secrets.SP_SITE_URL }}
           SP_CLIENT_ID: ${{ secrets.SP_CLIENT_ID }}
           SP_CLIENT_SECRET: ${{ secrets.SP_CLIENT_SECRET }}
-          SP_LIBRARY: ${{ secrets.SP_LIBRARY }}
+
+          # ✅ THIS IS THE ONE THAT FIXES YOUR KeyError
+          SP_LIBRARY_RELATIVE_URL: ${{ secrets.SP_LIBRARY_RELATIVE_URL }}
+
+          # Optional override (only add if you created this secret)
+          # JIRA_JQL: ${{ secrets.JIRA_JQL }}
 
         run: |
           python export_jira.py
