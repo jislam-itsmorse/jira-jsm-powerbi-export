@@ -37,15 +37,15 @@ jobs:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
 
-          SP_SITE_URL: ${{ secrets.SP_SITE_URL }}
+          SP_TENANT_ID: ${{ secrets.SP_TENANT_ID }}
           SP_CLIENT_ID: ${{ secrets.SP_CLIENT_ID }}
           SP_CLIENT_SECRET: ${{ secrets.SP_CLIENT_SECRET }}
 
-          # ✅ THIS IS THE ONE THAT FIXES YOUR KeyError
-          SP_LIBRARY_RELATIVE_URL: ${{ secrets.SP_LIBRARY_RELATIVE_URL }}
+          SP_SITE_HOSTNAME: ${{ secrets.SP_SITE_HOSTNAME }}
+          SP_SITE_PATH: ${{ secrets.SP_SITE_PATH }}
+          SP_LIBRARY_NAME: ${{ secrets.SP_LIBRARY_NAME }}
 
-          # Optional override (only add if you created this secret)
+          # optional
           # JIRA_JQL: ${{ secrets.JIRA_JQL }}
-
         run: |
           python export_jira.py
