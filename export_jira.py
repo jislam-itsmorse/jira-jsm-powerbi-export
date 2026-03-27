@@ -21,7 +21,7 @@ SP_LIBRARY = os.environ["SP_LIBRARY"]
 # JIRA QUERY (JSM)
 # --------------------
 JQL = """
-project = ITSD
+project = ISD
 ORDER BY created DESC
 """
 
