@@ -3,14 +3,24 @@ import requests
 import pandas as pd
 from requests.auth import HTTPBasicAuth
 
-
 # ==============================
-# JIRA ENV VARS
+# ENV VARIABLES
 # ==============================
 JIRA_BASE_URL = os.environ["JIRA_BASE_URL"]
 JIRA_EMAIL = os.environ["JIRA_EMAIL"]
 JIRA_API_TOKEN = os.environ["JIRA_API_TOKEN"]
 
+SP_TENANT_ID = os.environ["SP_TENANT_ID"]
+SP_CLIENT_ID = os.environ["SP_CLIENT_ID"]
+SP_CLIENT_SECRET = os.environ["SP_CLIENT_SECRET"]
+
+SP_SITE_HOSTNAME = os.environ["SP_SITE_HOSTNAME"]
+SP_SITE_PATH = os.environ["SP_SITE_PATH"]
+SP_LIBRARY_NAME = os.environ["SP_LIBRARY_NAME"]
+
+# ==============================
+# JIRA CONFIG
+# ==============================
 FIELDS = [
     "summary",
     "status",
@@ -20,47 +30,19 @@ FIELDS = [
     "issuetype"
 ]
 
-# ==============================
-# JIRA JQL QUERIES (3 SEPARATE EXPORTS)
-# ==============================
-JIRA_QUERIES = {
-    "requested_tickets.csv": """
-        project = ISD
-        AND created >= startOfWeek()
-        ORDER BY created ASC
-    """,
-
-    "resolved_tickets.csv": """
-        project = ISD
-        AND resolutiondate >= startOfWeek()
-        ORDER BY resolutiondate ASC
-    """,
-
-    "open_tickets.csv": """
-        project = ISD
-        AND resolution = EMPTY
-        ORDER BY created ASC
-    """
-}
+# 🔥 ONLY CURRENT WEEK DATA
+JIRA_QUERY = """
+    project = ISD
+    AND created >= startOfWeek()
+    ORDER BY created ASC
+"""
 
 
 # ==============================
-# SHAREPOINT (GRAPH) ENV VARS
-# ==============================
-SP_TENANT_ID = os.environ["SP_TENANT_ID"]
-SP_CLIENT_ID = os.environ["SP_CLIENT_ID"]
-SP_CLIENT_SECRET = os.environ["SP_CLIENT_SECRET"]
-
-SP_SITE_HOSTNAME = os.environ["SP_SITE_HOSTNAME"]     # e.g. itsmorse.sharepoint.com
-SP_SITE_PATH = os.environ["SP_SITE_PATH"]             # e.g. /sites/Morse-helpdesk
-SP_LIBRARY_NAME = os.environ["SP_LIBRARY_NAME"]       # e.g. jira-powerbi-data
-
-
-# ==============================
-# JIRA: Fetch issues (JQL search endpoint)
+# JIRA FETCH
 # ==============================
 def fetch_jira_issues(jql):
-    print("Starting Jira export...")
+    print("🔄 Fetching Jira issues...")
     print(jql.strip())
 
     all_issues = []
@@ -72,123 +54,160 @@ def fetch_jira_issues(jql):
             "maxResults": 100,
             "fields": ",".join(FIELDS),
         }
+
         if next_page_token:
             params["nextPageToken"] = next_page_token
 
-        r = requests.get(
+        response = requests.get(
             f"{JIRA_BASE_URL}/rest/api/3/search/jql",
             auth=HTTPBasicAuth(JIRA_EMAIL, JIRA_API_TOKEN),
             headers={"Accept": "application/json"},
             params=params,
         )
 
-        print(f"Jira HTTP: {r.status_code}")
-        if r.status_code != 200:
-            print(r.text)
-            raise Exception("Jira API call failed")
+        print(f"Jira API Status: {response.status_code}")
 
-        data = r.json()
-        all_issues.extend(data.get("issues", []))
+        if response.status_code != 200:
+            print(response.text)
+            raise Exception("❌ Jira API call failed")
+
+        data = response.json()
+        issues = data.get("issues", [])
+
+        all_issues.extend(issues)
         next_page_token = data.get("nextPageToken")
 
         if not next_page_token:
             break
 
-    print(f"Fetched {len(all_issues)} issues")
+    print(f"✅ Total issues fetched: {len(all_issues)}")
     return all_issues
 
 
+# ==============================
+# TRANSFORM
+# ==============================
 def issues_to_dataframe(issues):
+    print("🔄 Transforming data...")
+
     rows = []
     for issue in issues:
         f = issue.get("fields", {}) or {}
+
+        created = f.get("created")
+        resolved = f.get("resolutiondate")
+
         rows.append({
             "IssueKey": issue.get("key"),
             "Summary": f.get("summary"),
             "Status": (f.get("status") or {}).get("name"),
-            "CreatedDate": f.get("created"),
-            "ResolvedDate": f.get("resolutiondate"),
+            "CreatedDate": created,
+            "ResolvedDate": resolved,
             "Assignee": (f.get("assignee") or {}).get("displayName"),
             "IssueType": (f.get("issuetype") or {}).get("name"),
+
+            # Useful flags for Power BI
+            "IsResolved": 1 if resolved else 0,
+            "IsOpen": 1 if not resolved else 0
         })
-    return pd.DataFrame(rows)
+
+    df = pd.DataFrame(rows)
+    print(f"✅ Dataframe created with {len(df)} rows")
+    return df
 
 
 # ==============================
 # GRAPH AUTH
 # ==============================
 def get_graph_token():
-    token_url = f"https://login.microsoftonline.com/{SP_TENANT_ID}/oauth2/v2.0/token"
-    data = {
+    url = f"https://login.microsoftonline.com/{SP_TENANT_ID}/oauth2/v2.0/token"
+
+    response = requests.post(url, data={
         "client_id": SP_CLIENT_ID,
         "client_secret": SP_CLIENT_SECRET,
         "grant_type": "client_credentials",
         "scope": "https://graph.microsoft.com/.default",
-    }
-    r = requests.post(token_url, data=data)
-    if r.status_code != 200:
-        print("Token error:", r.text)
+    })
+
+    if response.status_code != 200:
+        print("❌ Token error:", response.text)
         raise Exception("Failed to get Graph token")
-    return r.json()["access_token"]
+
+    return response.json()["access_token"]
 
 
 def graph_get_site_id(token):
     url = f"https://graph.microsoft.com/v1.0/sites/{SP_SITE_HOSTNAME}:{SP_SITE_PATH}"
-    r = requests.get(url, headers={"Authorization": f"Bearer {token}"})
-    if r.status_code != 200:
-        print("Site lookup error:", r.text)
+
+    response = requests.get(url, headers={"Authorization": f"Bearer {token}"})
+
+    if response.status_code != 200:
+        print("❌ Site lookup error:", response.text)
         raise Exception("Failed to resolve SharePoint site")
-    return r.json()["id"]
+
+    return response.json()["id"]
 
 
 def graph_get_drive_id(token, site_id):
     url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drives"
-    r = requests.get(url, headers={"Authorization": f"Bearer {token}"})
-    if r.status_code != 200:
-        print("Drives lookup error:", r.text)
+
+    response = requests.get(url, headers={"Authorization": f"Bearer {token}"})
+
+    if response.status_code != 200:
+        print("❌ Drive lookup error:", response.text)
         raise Exception("Failed to list drives")
 
-    for d in r.json().get("value", []):
-        if d.get("name") == SP_LIBRARY_NAME:
-            return d["id"]
+    for drive in response.json().get("value", []):
+        if drive.get("name") == SP_LIBRARY_NAME:
+            return drive["id"]
 
-    raise Exception(f"Drive not found: {SP_LIBRARY_NAME}")
+    raise Exception(f"❌ Drive not found: {SP_LIBRARY_NAME}")
 
 
 def graph_upload_file(token, drive_id, local_path, target_name):
-    upload_url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root:/{target_name}:/content"
+    print(f"⬆️ Uploading {target_name} to SharePoint...")
+
+    url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root:/{target_name}:/content"
+
     with open(local_path, "rb") as f:
-        r = requests.put(
-            upload_url,
+        response = requests.put(
+            url,
             headers={"Authorization": f"Bearer {token}"},
             data=f
         )
 
-    if r.status_code not in (200, 201):
-        print("Upload error:", r.text)
+    if response.status_code not in (200, 201):
+        print("❌ Upload error:", response.text)
         raise Exception("Graph upload failed")
 
-    print("✅ Uploaded:", target_name)
+    print(f"✅ Uploaded: {target_name}")
 
 
 # ==============================
 # MAIN
 # ==============================
 if __name__ == "__main__":
+    print("🚀 Starting Jira → SharePoint export")
+
+    # Step 1: Fetch Jira data
+    issues = fetch_jira_issues(JIRA_QUERY)
+
+    # Step 2: Convert to DataFrame
+    df = issues_to_dataframe(issues)
+
+    if df.empty:
+        print("⚠️ WARNING: No data for current week")
+
+    # Step 3: Save CSV
+    csv_name = "jira_current_week.csv"
+    df.to_csv(csv_name, index=False)
+    print(f"💾 Saved: {csv_name}")
+
+    # Step 4: Upload to SharePoint
     token = get_graph_token()
     site_id = graph_get_site_id(token)
     drive_id = graph_get_drive_id(token, site_id)
 
-    for csv_name, jql in JIRA_QUERIES.items():
-        print(f"\n=== Exporting {csv_name} ===")
+    graph_upload_file(token, drive_id, csv_name, csv_name)
 
-        issues = fetch_jira_issues(jql)
-        df = issues_to_dataframe(issues)
-
-        if df.empty:
-            print(f"WARNING: {csv_name} is empty")
-        else:
-            print(f"Writing {len(df)} rows")
-
-        df.to_csv(csv_name, index=False)
-        graph_upload_file(token, drive_id, csv_name, csv_name)
+    print("🎉 DONE")
