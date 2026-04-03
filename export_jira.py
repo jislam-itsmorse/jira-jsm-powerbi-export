@@ -199,7 +199,7 @@ if __name__ == "__main__":
         print("⚠️ WARNING: No data for current week")
 
     # Step 3: Save CSV
-    csv_name = "jira_current_week.csv"
+    csv_name = "jira_tickets.csv"
     df.to_csv(csv_name, index=False)
     print(f"💾 Saved: {csv_name}")
 
