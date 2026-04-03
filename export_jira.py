@@ -25,22 +25,39 @@ SP_SITE_PATH = os.environ["SP_SITE_PATH"]
 SP_LIBRARY_NAME = os.environ["SP_LIBRARY_NAME"]
 
 # ==============================
+# FILE CONFIG
+# ==============================
+LAST_SYNC_FILE = "last_sync.txt"
+EXCEL_FILE = "jira_tickets.xlsx"
+
+# ==============================
 # JIRA CONFIG
 # ==============================
 FIELDS = [
     "summary",
     "status",
     "created",
+    "updated",          # ✅ IMPORTANT
     "resolutiondate",
     "assignee",
     "issuetype"
 ]
 
-JIRA_QUERY = """
-    project = ISD
-    AND created >= startOfWeek(-12)
-    ORDER BY created ASC
-"""
+# ==============================
+# WATERMARK FUNCTIONS
+# ==============================
+def get_last_sync():
+    if not os.path.exists(LAST_SYNC_FILE):
+        return (datetime.now(timezone.utc) - pd.Timedelta(weeks=4)).isoformat()
+
+    with open(LAST_SYNC_FILE, "r") as f:
+        return f.read().strip()
+
+
+def save_last_sync():
+    now = datetime.now(timezone.utc).isoformat()
+    with open(LAST_SYNC_FILE, "w") as f:
+        f.write(now)
 
 # ==============================
 # JIRA FETCH
@@ -99,6 +116,7 @@ def issues_to_dataframe(issues):
         f = issue.get("fields", {}) or {}
 
         created = f.get("created")
+        updated = f.get("updated")
         resolved = f.get("resolutiondate")
 
         rows.append({
@@ -106,6 +124,7 @@ def issues_to_dataframe(issues):
             "Summary": f.get("summary"),
             "Status": (f.get("status") or {}).get("name"),
             "CreatedDate": created,
+            "UpdatedDate": updated,   # ✅ NEW
             "ResolvedDate": resolved,
             "Assignee": (f.get("assignee") or {}).get("displayName"),
             "IssueType": (f.get("issuetype") or {}).get("name"),
@@ -115,9 +134,13 @@ def issues_to_dataframe(issues):
 
     df = pd.DataFrame(rows)
 
-    # ✅ FIX: Handle mixed timezones safely + Excel compatibility
+    # ✅ Timezone-safe conversions
     df["CreatedDate"] = pd.to_datetime(df["CreatedDate"], errors="coerce", utc=True).dt.tz_convert(None)
+    df["UpdatedDate"] = pd.to_datetime(df["UpdatedDate"], errors="coerce", utc=True).dt.tz_convert(None)
     df["ResolvedDate"] = pd.to_datetime(df["ResolvedDate"], errors="coerce", utc=True).dt.tz_convert(None)
+
+    # ✅ Safety fallback
+    df["UpdatedDate"] = df["UpdatedDate"].fillna(df["CreatedDate"])
 
     print(f"✅ Dataframe created with {len(df)} rows")
     return df
@@ -194,28 +217,53 @@ def graph_upload_file(token, drive_id, local_path, target_name):
 # MAIN
 # ==============================
 if __name__ == "__main__":
-    print("🚀 Starting Jira → SharePoint export")
+    print("🚀 Starting Jira → SharePoint incremental export")
 
-    # Step 1: Fetch Jira data
-    issues = fetch_jira_issues(JIRA_QUERY)
+    # Step 1: Get last sync
+    last_sync = get_last_sync()
 
-    # Step 2: Convert to DataFrame
+    JIRA_QUERY_DYNAMIC = f"""
+        project = ISD
+        AND updated >= "{last_sync}"
+        ORDER BY updated ASC
+    """
+
+    # Step 2: Fetch Jira data
+    issues = fetch_jira_issues(JIRA_QUERY_DYNAMIC)
+
+    # Step 3: Convert to DataFrame
     df = issues_to_dataframe(issues)
 
+    # Step 4: Merge with existing file
+    if os.path.exists(EXCEL_FILE):
+        print("📂 Loading existing file for merge...")
+
+        existing_df = pd.read_excel(EXCEL_FILE)
+
+        existing_df["CreatedDate"] = pd.to_datetime(existing_df["CreatedDate"], errors="coerce")
+        existing_df["UpdatedDate"] = pd.to_datetime(existing_df["UpdatedDate"], errors="coerce")
+        existing_df["ResolvedDate"] = pd.to_datetime(existing_df["ResolvedDate"], errors="coerce")
+
+        existing_df["UpdatedDate"] = existing_df["UpdatedDate"].fillna(existing_df["CreatedDate"])
+
+        df = pd.concat([existing_df, df], ignore_index=True)
+
+        # ✅ Correct deduplication
+        df = df.sort_values("UpdatedDate").drop_duplicates(
+            subset=["IssueKey"],
+            keep="last"
+        )
+
+        print(f"🔁 After merge: {len(df)} records")
+
     if df.empty:
-        print("⚠️ WARNING: No data returned")
+        print("⚠️ WARNING: No data to write")
 
-    # ==============================
-    # Step 3: Save Excel with Table
-    # ==============================
-    now = datetime.now()
-    year, week, _ = now.isocalendar()
-    xlsx_name = f"jira_tickets_{year}_W{week}.xlsx"
-
-    with pd.ExcelWriter(xlsx_name, engine="openpyxl") as writer:
+    # Step 5: Save Excel
+    with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Tickets")
 
-    wb = load_workbook(xlsx_name)
+    wb = load_workbook(EXCEL_FILE)
     ws = wb["Tickets"]
 
     max_row = ws.max_row
@@ -247,17 +295,19 @@ if __name__ == "__main__":
 
         ws.column_dimensions[col_letter].width = max_length + 2
 
-    wb.save(xlsx_name)
+    wb.save(EXCEL_FILE)
 
-    print(f"💾 Saved with table: {xlsx_name}")
+    print(f"💾 Saved: {EXCEL_FILE}")
 
-    # ==============================
-    # Step 4: Upload to SharePoint
-    # ==============================
+    # Step 6: Upload to SharePoint
     token = get_graph_token()
     site_id = graph_get_site_id(token)
     drive_id = graph_get_drive_id(token, site_id)
 
-    graph_upload_file(token, drive_id, xlsx_name, xlsx_name)
+    graph_upload_file(token, drive_id, EXCEL_FILE, EXCEL_FILE)
+
+    # Step 7: Save watermark
+    save_last_sync()
+    print("🕒 Sync timestamp updated")
 
     print("🎉 DONE")
