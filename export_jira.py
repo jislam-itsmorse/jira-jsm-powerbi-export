@@ -7,6 +7,8 @@ from openpyxl import load_workbook
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
 
+from datetime import datetime, timezone
+
 # ==============================
 # ENV VARIABLES
 # ==============================
@@ -113,9 +115,9 @@ def issues_to_dataframe(issues):
 
     df = pd.DataFrame(rows)
 
-    # ✅ Normalize date columns (important for Excel + Power Automate)
-    df["CreatedDate"] = pd.to_datetime(df["CreatedDate"], errors="coerce")
-    df["ResolvedDate"] = pd.to_datetime(df["ResolvedDate"], errors="coerce")
+    # ✅ FIX: Handle mixed timezones safely + Excel compatibility
+    df["CreatedDate"] = pd.to_datetime(df["CreatedDate"], errors="coerce", utc=True).dt.tz_convert(None)
+    df["ResolvedDate"] = pd.to_datetime(df["ResolvedDate"], errors="coerce", utc=True).dt.tz_convert(None)
 
     print(f"✅ Dataframe created with {len(df)} rows")
     return df
@@ -206,12 +208,13 @@ if __name__ == "__main__":
     # ==============================
     # Step 3: Save Excel with Table
     # ==============================
-    xlsx_name = "jira_tickets.xlsx"
+    now = datetime.now()
+    year, week, _ = now.isocalendar()
+    xlsx_name = f"jira_tickets_{year}_W{week}.xlsx"
 
     with pd.ExcelWriter(xlsx_name, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Tickets")
 
-    # Load workbook
     wb = load_workbook(xlsx_name)
     ws = wb["Tickets"]
 
@@ -223,8 +226,6 @@ if __name__ == "__main__":
 
     style = TableStyleInfo(
         name="TableStyleMedium9",
-        showFirstColumn=False,
-        showLastColumn=False,
         showRowStripes=True,
         showColumnStripes=False,
     )
