@@ -3,6 +3,10 @@ import requests
 import pandas as pd
 from requests.auth import HTTPBasicAuth
 
+from openpyxl import load_workbook
+from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.utils import get_column_letter
+
 # ==============================
 # ENV VARIABLES
 # ==============================
@@ -30,13 +34,11 @@ FIELDS = [
     "issuetype"
 ]
 
-# 🔥 ONLY CURRENT WEEK DATA
 JIRA_QUERY = """
     project = ISD
     AND created >= startOfWeek(-12)
     ORDER BY created ASC
 """
-
 
 # ==============================
 # JIRA FETCH
@@ -105,13 +107,16 @@ def issues_to_dataframe(issues):
             "ResolvedDate": resolved,
             "Assignee": (f.get("assignee") or {}).get("displayName"),
             "IssueType": (f.get("issuetype") or {}).get("name"),
-
-            # Useful flags for Power BI
             "IsResolved": 1 if resolved else 0,
             "IsOpen": 1 if not resolved else 0
         })
 
     df = pd.DataFrame(rows)
+
+    # ✅ Normalize date columns (important for Excel + Power Automate)
+    df["CreatedDate"] = pd.to_datetime(df["CreatedDate"], errors="coerce")
+    df["ResolvedDate"] = pd.to_datetime(df["ResolvedDate"], errors="coerce")
+
     print(f"✅ Dataframe created with {len(df)} rows")
     return df
 
@@ -196,18 +201,62 @@ if __name__ == "__main__":
     df = issues_to_dataframe(issues)
 
     if df.empty:
-        print("⚠️ WARNING: No data for current week")
+        print("⚠️ WARNING: No data returned")
 
-    # Step 3: Save CSV
-    csv_name = "jira_tickets.csv"
-    df.to_csv(csv_name, index=False)
-    print(f"💾 Saved: {csv_name}")
+    # ==============================
+    # Step 3: Save Excel with Table
+    # ==============================
+    xlsx_name = "jira_tickets.xlsx"
 
+    with pd.ExcelWriter(xlsx_name, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Tickets")
+
+    # Load workbook
+    wb = load_workbook(xlsx_name)
+    ws = wb["Tickets"]
+
+    max_row = ws.max_row
+    max_col = ws.max_column
+    table_range = f"A1:{get_column_letter(max_col)}{max_row}"
+
+    table = Table(displayName="TicketsTable", ref=table_range)
+
+    style = TableStyleInfo(
+        name="TableStyleMedium9",
+        showFirstColumn=False,
+        showLastColumn=False,
+        showRowStripes=True,
+        showColumnStripes=False,
+    )
+
+    table.tableStyleInfo = style
+    ws.add_table(table)
+
+    # Auto-size columns
+    for col in ws.columns:
+        max_length = 0
+        col_letter = col[0].column_letter
+
+        for cell in col:
+            try:
+                if cell.value:
+                    max_length = max(max_length, len(str(cell.value)))
+            except:
+                pass
+
+        ws.column_dimensions[col_letter].width = max_length + 2
+
+    wb.save(xlsx_name)
+
+    print(f"💾 Saved with table: {xlsx_name}")
+
+    # ==============================
     # Step 4: Upload to SharePoint
+    # ==============================
     token = get_graph_token()
     site_id = graph_get_site_id(token)
     drive_id = graph_get_drive_id(token, site_id)
 
-    graph_upload_file(token, drive_id, csv_name, csv_name)
+    graph_upload_file(token, drive_id, xlsx_name, xlsx_name)
 
     print("🎉 DONE")
