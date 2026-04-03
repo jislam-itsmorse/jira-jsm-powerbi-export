@@ -33,7 +33,7 @@ FIELDS = [
 # 🔥 ONLY CURRENT WEEK DATA
 JIRA_QUERY = """
     project = ISD
-    AND created >= startOfWeek()
+    AND created >= startOfWeek(-12)
     ORDER BY created ASC
 """
 
