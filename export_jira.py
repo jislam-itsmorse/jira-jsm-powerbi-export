@@ -50,7 +50,7 @@ def fetch_jira_issues(jql):
         }
 
         res = requests.get(
-            f"{JIRA_BASE_URL}/rest/api/3/search",
+            f"{JIRA_BASE_URL}/rest/api/3/search/jql",
             auth=HTTPBasicAuth(JIRA_EMAIL, JIRA_API_TOKEN),
             headers={"Accept": "application/json"},
             params=params,
