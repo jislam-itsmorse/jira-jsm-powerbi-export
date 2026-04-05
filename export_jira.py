@@ -16,69 +16,59 @@ SP_CLIENT_SECRET = os.environ["SP_CLIENT_SECRET"]
 
 SP_SITE_HOSTNAME = os.environ["SP_SITE_HOSTNAME"]
 SP_SITE_PATH = os.environ["SP_SITE_PATH"]
-SP_LIBRARY_NAME = os.environ["SP_LIBRARY_NAME"]
 
 # ==============================
-# JIRA CONFIG
+# CONFIG
 # ==============================
 FIELDS = [
-    "summary",
-    "status",
     "created",
-    "resolutiondate",
-    "assignee",
-    "issuetype"
+    "resolutiondate"
 ]
 
-# 🔥 ONLY CURRENT WEEK DATA
+# ✅ HISTORICAL QUERY (for true backlog)
 JIRA_QUERY = """
-    project = ISD
-    AND created >= startOfWeek()
-    ORDER BY created ASC
+project = ISD
+AND created >= -90d
+ORDER BY created ASC
 """
-
 
 # ==============================
 # JIRA FETCH
 # ==============================
 def fetch_jira_issues(jql):
     print("🔄 Fetching Jira issues...")
-    print(jql.strip())
 
     all_issues = []
-    next_page_token = None
+    start_at = 0
 
     while True:
         params = {
             "jql": jql,
+            "startAt": start_at,
             "maxResults": 100,
             "fields": ",".join(FIELDS),
         }
 
-        if next_page_token:
-            params["nextPageToken"] = next_page_token
-
-        response = requests.get(
-            f"{JIRA_BASE_URL}/rest/api/3/search/jql",
+        res = requests.get(
+            f"{JIRA_BASE_URL}/rest/api/3/search",
             auth=HTTPBasicAuth(JIRA_EMAIL, JIRA_API_TOKEN),
             headers={"Accept": "application/json"},
             params=params,
         )
 
-        print(f"Jira API Status: {response.status_code}")
+        if res.status_code != 200:
+            print(res.text)
+            raise Exception("❌ Jira API failed")
 
-        if response.status_code != 200:
-            print(response.text)
-            raise Exception("❌ Jira API call failed")
-
-        data = response.json()
+        data = res.json()
         issues = data.get("issues", [])
 
         all_issues.extend(issues)
-        next_page_token = data.get("nextPageToken")
 
-        if not next_page_token:
+        if start_at + 100 >= data.get("total", 0):
             break
+
+        start_at += 100
 
     print(f"✅ Total issues fetched: {len(all_issues)}")
     return all_issues
@@ -88,32 +78,72 @@ def fetch_jira_issues(jql):
 # TRANSFORM
 # ==============================
 def issues_to_dataframe(issues):
-    print("🔄 Transforming data...")
-
     rows = []
+
     for issue in issues:
         f = issue.get("fields", {}) or {}
 
-        created = f.get("created")
-        resolved = f.get("resolutiondate")
-
         rows.append({
-            "IssueKey": issue.get("key"),
-            "Summary": f.get("summary"),
-            "Status": (f.get("status") or {}).get("name"),
-            "CreatedDate": created,
-            "ResolvedDate": resolved,
-            "Assignee": (f.get("assignee") or {}).get("displayName"),
-            "IssueType": (f.get("issuetype") or {}).get("name"),
-
-            # Useful flags for Power BI
-            "IsResolved": 1 if resolved else 0,
-            "IsOpen": 1 if not resolved else 0
+            "CreatedDate": f.get("created"),
+            "ResolvedDate": f.get("resolutiondate"),
         })
 
     df = pd.DataFrame(rows)
-    print(f"✅ Dataframe created with {len(df)} rows")
+
+    if df.empty:
+        return df
+
+    df["CreatedDate"] = pd.to_datetime(df["CreatedDate"], errors="coerce")
+    df["ResolvedDate"] = pd.to_datetime(df["ResolvedDate"], errors="coerce")
+
     return df
+
+
+# ==============================
+# TRUE BACKLOG METRICS
+# ==============================
+def compute_weekly_metrics(df):
+    print("🔄 Computing TRUE backlog metrics...")
+
+    if df.empty:
+        return None
+
+    now = pd.Timestamp.utcnow()
+
+    week_start = now.to_period("W").start_time
+    week_end = now.to_period("W").end_time
+
+    # ✅ Submitted this week
+    submitted = df[
+        (df["CreatedDate"] >= week_start) &
+        (df["CreatedDate"] <= week_end)
+    ].shape[0]
+
+    # ✅ Resolved this week
+    resolved = df[
+        (df["ResolvedDate"].notna()) &
+        (df["ResolvedDate"] >= week_start) &
+        (df["ResolvedDate"] <= week_end)
+    ].shape[0]
+
+    # ✅ TRUE backlog
+    open_count = df[
+        (df["CreatedDate"] <= week_end) &
+        (
+            df["ResolvedDate"].isna() |
+            (df["ResolvedDate"] > week_end)
+        )
+    ].shape[0]
+
+    metrics = {
+        "WeekStart": week_start.strftime("%Y-%m-%d"),
+        "Submitted": int(submitted),
+        "Resolved": int(resolved),
+        "Open": int(open_count)
+    }
+
+    print("✅ Metrics:", metrics)
+    return metrics
 
 
 # ==============================
@@ -122,92 +152,125 @@ def issues_to_dataframe(issues):
 def get_graph_token():
     url = f"https://login.microsoftonline.com/{SP_TENANT_ID}/oauth2/v2.0/token"
 
-    response = requests.post(url, data={
+    res = requests.post(url, data={
         "client_id": SP_CLIENT_ID,
         "client_secret": SP_CLIENT_SECRET,
         "grant_type": "client_credentials",
         "scope": "https://graph.microsoft.com/.default",
     })
 
-    if response.status_code != 200:
-        print("❌ Token error:", response.text)
-        raise Exception("Failed to get Graph token")
-
-    return response.json()["access_token"]
+    res.raise_for_status()
+    return res.json()["access_token"]
 
 
 def graph_get_site_id(token):
     url = f"https://graph.microsoft.com/v1.0/sites/{SP_SITE_HOSTNAME}:{SP_SITE_PATH}"
-
-    response = requests.get(url, headers={"Authorization": f"Bearer {token}"})
-
-    if response.status_code != 200:
-        print("❌ Site lookup error:", response.text)
-        raise Exception("Failed to resolve SharePoint site")
-
-    return response.json()["id"]
+    res = requests.get(url, headers={"Authorization": f"Bearer {token}"})
+    res.raise_for_status()
+    return res.json()["id"]
 
 
-def graph_get_drive_id(token, site_id):
-    url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drives"
-
-    response = requests.get(url, headers={"Authorization": f"Bearer {token}"})
-
-    if response.status_code != 200:
-        print("❌ Drive lookup error:", response.text)
-        raise Exception("Failed to list drives")
-
-    for drive in response.json().get("value", []):
-        if drive.get("name") == SP_LIBRARY_NAME:
-            return drive["id"]
-
-    raise Exception(f"❌ Drive not found: {SP_LIBRARY_NAME}")
+def graph_get_lists(token, site_id):
+    url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists"
+    res = requests.get(url, headers={"Authorization": f"Bearer {token}"})
+    res.raise_for_status()
+    return {l["name"]: l["id"] for l in res.json()["value"]}
 
 
-def graph_upload_file(token, drive_id, local_path, target_name):
-    print(f"⬆️ Uploading {target_name} to SharePoint...")
+# ==============================
+# UPSERT
+# ==============================
+def graph_upsert_item(token, site_id, list_id, week_start, payload):
+    url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items?$expand=fields"
+    res = requests.get(url, headers={"Authorization": f"Bearer {token}"})
+    res.raise_for_status()
 
-    url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root:/{target_name}:/content"
+    for item in res.json()["value"]:
+        if item["fields"].get("WeekStart") == week_start:
+            item_id = item["id"]
 
-    with open(local_path, "rb") as f:
-        response = requests.put(
-            url,
-            headers={"Authorization": f"Bearer {token}"},
-            data=f
-        )
+            update_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items/{item_id}/fields"
 
-    if response.status_code not in (200, 201):
-        print("❌ Upload error:", response.text)
-        raise Exception("Graph upload failed")
+            requests.patch(
+                update_url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json"
+                },
+                json=payload
+            )
 
-    print(f"✅ Uploaded: {target_name}")
+            print(f"♻️ Updated week {week_start}")
+            return
+
+    # Create new
+    create_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items"
+
+    requests.post(
+        create_url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        },
+        json={"fields": payload}
+    )
+
+    print(f"✅ Created week {week_start}")
+
+
+# ==============================
+# PUSH TO SHAREPOINT
+# ==============================
+def push_metrics(token, site_id, metrics):
+    lists = graph_get_lists(token, site_id)
+
+    resolved_id = lists["Weekly Resolved Tickets"]
+    submitted_id = lists["Weekly Submitted Tickets"]
+    open_id = lists["Weekly Open Tickets"]
+
+    week = metrics["WeekStart"]
+
+    graph_upsert_item(token, site_id, resolved_id, week, {
+        "Title": f"Week {week}",
+        "WeekStart": week,
+        "ResolvedCount": metrics["Resolved"]
+    })
+
+    graph_upsert_item(token, site_id, submitted_id, week, {
+        "Title": f"Week {week}",
+        "WeekStart": week,
+        "SubmittedCount": metrics["Submitted"]
+    })
+
+    graph_upsert_item(token, site_id, open_id, week, {
+        "Title": f"Week {week}",
+        "WeekStart": week,
+        "OpenCount": metrics["Open"]
+    })
 
 
 # ==============================
 # MAIN
 # ==============================
 if __name__ == "__main__":
-    print("🚀 Starting Jira → SharePoint export")
+    print("🚀 Jira → SharePoint TRUE Weekly Metrics")
 
-    # Step 1: Fetch Jira data
     issues = fetch_jira_issues(JIRA_QUERY)
-
-    # Step 2: Convert to DataFrame
     df = issues_to_dataframe(issues)
 
     if df.empty:
-        print("⚠️ WARNING: No data for current week")
+        print("⚠️ No data found")
+        exit()
 
-    # Step 3: Save CSV
-    csv_name = "jira_tickets.csv"
-    df.to_csv(csv_name, index=False)
-    print(f"💾 Saved: {csv_name}")
+    metrics = compute_weekly_metrics(df)
 
-    # Step 4: Upload to SharePoint
+    if not metrics:
+        print("⚠️ No metrics computed")
+        exit()
+
     token = get_graph_token()
     site_id = graph_get_site_id(token)
-    drive_id = graph_get_drive_id(token, site_id)
 
-    graph_upload_file(token, drive_id, csv_name, csv_name)
+    push_metrics(token, site_id, metrics)
 
     print("🎉 DONE")
