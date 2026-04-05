@@ -16,8 +16,8 @@ JIRA_API_TOKEN = os.environ["JIRA_API_TOKEN"]
 JIRA_QUERY_ACTIVITY = """
 project = ISD
 AND (
-    created >= startOfWeek()
-    OR resolved >= startOfWeek()
+    created >= -30d
+    OR resolved >= -30d
 )
 ORDER BY created DESC
 """
