@@ -20,15 +20,12 @@ SP_SITE_PATH = os.environ["SP_SITE_PATH"]
 # ==============================
 # CONFIG
 # ==============================
-FIELDS = [
-    "created",
-    "resolutiondate"
-]
+FIELDS = ["created", "resolutiondate"]
 
-# ✅ HISTORICAL QUERY (for true backlog)
+# ✅ Historical query (required for backlog)
 JIRA_QUERY = """
 project = ISD
-AND created >= -90d
+AND created <= endOfWeek()
 ORDER BY created ASC
 """
 
@@ -75,7 +72,7 @@ def fetch_jira_issues(jql):
 
 
 # ==============================
-# TRANSFORM
+# TRANSFORM (FIXED TZ)
 # ==============================
 def issues_to_dataframe(issues):
     rows = []
@@ -93,14 +90,15 @@ def issues_to_dataframe(issues):
     if df.empty:
         return df
 
-    df["CreatedDate"] = pd.to_datetime(df["CreatedDate"], errors="coerce")
-    df["ResolvedDate"] = pd.to_datetime(df["ResolvedDate"], errors="coerce")
+    # ✅ FORCE UTC (critical fix)
+    df["CreatedDate"] = pd.to_datetime(df["CreatedDate"], errors="coerce", utc=True)
+    df["ResolvedDate"] = pd.to_datetime(df["ResolvedDate"], errors="coerce", utc=True)
 
     return df
 
 
 # ==============================
-# TRUE BACKLOG METRICS
+# TRUE BACKLOG METRICS (FIXED)
 # ==============================
 def compute_weekly_metrics(df):
     print("🔄 Computing TRUE backlog metrics...")
@@ -108,10 +106,12 @@ def compute_weekly_metrics(df):
     if df.empty:
         return None
 
-    now = pd.Timestamp.utcnow()
+    # ✅ timezone-aware current time
+    now = pd.Timestamp.now(tz="UTC")
 
-    week_start = now.to_period("W").start_time
-    week_end = now.to_period("W").end_time
+    # ✅ Week boundaries (Monday → Sunday)
+    week_start = now.floor("W-MON")
+    week_end = week_start + pd.Timedelta(days=6, hours=23, minutes=59, seconds=59)
 
     # ✅ Submitted this week
     submitted = df[
@@ -126,7 +126,7 @@ def compute_weekly_metrics(df):
         (df["ResolvedDate"] <= week_end)
     ].shape[0]
 
-    # ✅ TRUE backlog
+    # ✅ TRUE backlog (carry-over)
     open_count = df[
         (df["CreatedDate"] <= week_end) &
         (
@@ -178,7 +178,7 @@ def graph_get_lists(token, site_id):
 
 
 # ==============================
-# UPSERT
+# UPSERT (NO DUPLICATES)
 # ==============================
 def graph_upsert_item(token, site_id, list_id, week_start, payload):
     url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items?$expand=fields"
