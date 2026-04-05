@@ -2,7 +2,7 @@ name: Jira JSM Export to SharePoint
 
 on:
   schedule:
-    - cron: "0 2 * * *"   # daily 02:00 UTC
+    - cron: "0 17 * * 5"   # every Friday at 12 PM Peru time
   workflow_dispatch:
 
 jobs:
