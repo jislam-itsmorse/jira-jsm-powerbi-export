@@ -10,8 +10,14 @@ JIRA_BASE_URL = os.environ["JIRA_BASE_URL"]
 JIRA_EMAIL = os.environ["JIRA_EMAIL"]
 JIRA_API_TOKEN = os.environ["JIRA_API_TOKEN"]
 
+SP_SITE_URL = os.environ["SP_SITE_URL"]  # e.g. yourtenant.sharepoint.com/sites/yoursite
+SP_LIST_NAME = os.environ["SP_LIST_NAME"]
+SP_CLIENT_ID = os.environ["SP_CLIENT_ID"]
+SP_CLIENT_SECRET = os.environ["SP_CLIENT_SECRET"]
+SP_TENANT_ID = os.environ["SP_TENANT_ID"]
+
 # ==============================
-# JQL QUERIES (FIXED)
+# JQL QUERIES
 # ==============================
 JIRA_QUERY_ACTIVITY = """
 project = ISD
@@ -84,12 +90,11 @@ def issues_to_dataframe(issues):
             "ResolvedDate": pd.to_datetime(fields.get("resolutiondate"), utc=True)
         })
 
-    # ✅ IMPORTANT: ensure columns always exist even if empty
     return pd.DataFrame(rows, columns=["CreatedDate", "ResolvedDate"])
 
 
 # ==============================
-# COMPUTE METRICS (FIXED)
+# COMPUTE METRICS
 # ==============================
 def compute_weekly_metrics(df_activity, df_backlog):
     print("🔄 Computing TRUE metrics...")
@@ -97,35 +102,24 @@ def compute_weekly_metrics(df_activity, df_backlog):
     if df_activity.empty and df_backlog.empty:
         return None
 
-    # ✅ Use UTC consistently
     now = pd.Timestamp.now(tz="UTC")
 
-    # ✅ Start of week (Monday)
     week_start = (now - pd.Timedelta(days=now.weekday())).normalize()
     week_end = week_start + pd.Timedelta(days=7)
 
     print(f"Week range: {week_start} → {week_end}")
 
-    # ======================
-    # SUBMITTED
-    # ======================
     submitted = df_activity[
         (df_activity["CreatedDate"] >= week_start) &
         (df_activity["CreatedDate"] < week_end)
     ].shape[0]
 
-    # ======================
-    # RESOLVED
-    # ======================
     resolved = df_activity[
         (df_activity["ResolvedDate"].notna()) &
         (df_activity["ResolvedDate"] >= week_start) &
         (df_activity["ResolvedDate"] < week_end)
     ].shape[0]
 
-    # ======================
-    # TRUE BACKLOG
-    # ======================
     open_count = df_backlog.shape[0]
 
     metrics = {
@@ -140,23 +134,73 @@ def compute_weekly_metrics(df_activity, df_backlog):
 
 
 # ==============================
+# SHAREPOINT AUTH
+# ==============================
+def get_access_token():
+    url = f"https://accounts.accesscontrol.windows.net/{SP_TENANT_ID}/tokens/OAuth/2"
+
+    response = requests.post(url, data={
+        "grant_type": "client_credentials",
+        "client_id": f"{SP_CLIENT_ID}@{SP_TENANT_ID}",
+        "client_secret": SP_CLIENT_SECRET,
+        "resource": f"00000003-0000-0ff1-ce00-000000000000/{SP_SITE_URL}@{SP_TENANT_ID}"
+    })
+
+    response.raise_for_status()
+    return response.json()["access_token"]
+
+
+# ==============================
+# PUSH TO SHAREPOINT
+# ==============================
+def push_to_sharepoint(metrics):
+    print("🔄 Pushing to SharePoint...")
+
+    token = get_access_token()
+
+    url = f"https://{SP_SITE_URL}/_api/web/lists/GetByTitle('{SP_LIST_NAME}')/items"
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json;odata=verbose",
+        "Content-Type": "application/json;odata=verbose"
+    }
+
+    payload = {
+        "__metadata": {
+            "type": f"SP.Data.{SP_LIST_NAME.replace(' ', '_x0020_')}ListItem"
+        },
+        "Title": metrics["WeekStart"],
+        "Submitted": metrics["Submitted"],
+        "Resolved": metrics["Resolved"],
+        "Open": metrics["Open"]
+    }
+
+    response = requests.post(url, json=payload, headers=headers)
+
+    if response.status_code not in (200, 201):
+        print("❌ SharePoint Error:", response.text)
+        response.raise_for_status()
+
+    print("✅ Data pushed to SharePoint")
+
+
+# ==============================
 # MAIN
 # ==============================
 if __name__ == "__main__":
     print("🚀 Jira → SharePoint TRUE Weekly Metrics")
 
-    # 🔹 Fetch BOTH datasets
     issues_activity = fetch_jira_issues(JIRA_QUERY_ACTIVITY)
     issues_backlog = fetch_jira_issues(JIRA_QUERY_BACKLOG)
 
-    # 🔹 Convert to DataFrames
     df_activity = issues_to_dataframe(issues_activity)
     df_backlog = issues_to_dataframe(issues_backlog)
 
-    # 🔹 Compute metrics
     metrics = compute_weekly_metrics(df_activity, df_backlog)
 
     if metrics:
+        push_to_sharepoint(metrics)
         print("🎉 DONE")
     else:
         print("⚠️ No data found")
