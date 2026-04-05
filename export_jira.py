@@ -109,24 +109,31 @@ def compute_weekly_metrics(df):
     # ✅ timezone-aware current time
     now = pd.Timestamp.now(tz="UTC")
 
-    # ✅ Week boundaries (Monday → Sunday)
-    week_start = now.floor("W-MON")
+    # ✅ FIX: Compute Monday manually (no floor)
+    week_start = now - pd.Timedelta(days=now.weekday())
+    week_start = week_start.normalize()  # set to 00:00:00
+
+    # ✅ Week end (Sunday 23:59:59)
     week_end = week_start + pd.Timedelta(days=6, hours=23, minutes=59, seconds=59)
 
-    # ✅ Submitted this week
+    # =========================
+    # METRICS
+    # =========================
+
+    # Submitted this week
     submitted = df[
         (df["CreatedDate"] >= week_start) &
         (df["CreatedDate"] <= week_end)
     ].shape[0]
 
-    # ✅ Resolved this week
+    # Resolved this week
     resolved = df[
         (df["ResolvedDate"].notna()) &
         (df["ResolvedDate"] >= week_start) &
         (df["ResolvedDate"] <= week_end)
     ].shape[0]
 
-    # ✅ TRUE backlog (carry-over)
+    # TRUE backlog
     open_count = df[
         (df["CreatedDate"] <= week_end) &
         (
