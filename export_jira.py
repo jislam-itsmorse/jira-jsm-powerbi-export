@@ -25,8 +25,11 @@ FIELDS = ["created", "resolutiondate"]
 # ✅ Historical query (required for backlog)
 JIRA_QUERY = """
 project = ISD
-AND created <= endOfWeek()
-ORDER BY created ASC
+AND (
+    created >= -30d
+    OR resolved >= -30d
+)
+ORDER BY created DESC
 """
 
 # ==============================
