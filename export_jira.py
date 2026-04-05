@@ -16,8 +16,8 @@ JIRA_API_TOKEN = os.environ["JIRA_API_TOKEN"]
 JIRA_QUERY_ACTIVITY = """
 project = ISD
 AND (
-    created >= startOfWeek()
-    OR resolved >= startOfWeek()
+    created >= startOfWeek(-1d)
+    OR resolved >= startOfWeek(-1d)
 )
 ORDER BY created DESC
 """
@@ -84,8 +84,8 @@ def issues_to_dataframe(issues):
             "ResolvedDate": pd.to_datetime(fields.get("resolutiondate"), utc=True)
         })
 
-    df = pd.DataFrame(rows)
-    return df
+    # ✅ IMPORTANT: ensure columns always exist even if empty
+    return pd.DataFrame(rows, columns=["CreatedDate", "ResolvedDate"])
 
 
 # ==============================
