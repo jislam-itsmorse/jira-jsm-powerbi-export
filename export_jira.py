@@ -26,8 +26,8 @@ FIELDS = ["created", "resolutiondate"]
 JIRA_QUERY = """
 project = ISD
 AND (
-    created >= -30d
-    OR resolved >= -30d
+    statusCategory != Done
+    OR resolved >= startOfWeek()
 )
 ORDER BY created DESC
 """
