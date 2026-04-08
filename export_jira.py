@@ -145,14 +145,14 @@ def compute_weekly_metrics(df_activity, df_backlog):
     open_count = df_backlog.shape[0]
 
     onboarding_completed = df_activity[
-        (df_activity["RequestType"] == "Onboard new employees (ISD)") &
+        (df_activity["RequestType"] == "Onboard new employees") &
         (df_activity["ResolvedDate"].notna()) &
         (df_activity["ResolvedDate"] >= week_start) &
         (df_activity["ResolvedDate"] <= week_end)
     ].shape[0]
 
     offboarding_completed = df_activity[
-        (df_activity["RequestType"] == "Employee offboarding (ISD)") &
+        (df_activity["RequestType"] == "Employee offboarding") &
         (df_activity["ResolvedDate"].notna()) &
         (df_activity["ResolvedDate"] >= week_start) &
         (df_activity["ResolvedDate"] <= week_end)
