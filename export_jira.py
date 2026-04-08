@@ -32,8 +32,9 @@ JIRA_QUERY_ACTIVITY = """
 project = ISD
 AND statusCategory = Done
 AND "Request Type" IN (
-    "Employee offboarding (ISD)",
-    "Onboard new employees (ISD)"
+    "Employee offboarding",
+    "Onboard new employees",
+    "IT Request"
 )
 AND (
     created >= -30d
