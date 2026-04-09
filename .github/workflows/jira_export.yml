@@ -45,6 +45,8 @@ jobs:
           SP_SITE_PATH: ${{ secrets.SP_SITE_PATH }}
           SP_LIBRARY_NAME: ${{ secrets.SP_LIBRARY_NAME }}
 
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
           # optional
           # JIRA_JQL: ${{ secrets.JIRA_JQL }}
         run: |
