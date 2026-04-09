@@ -251,13 +251,11 @@ def upsert_metrics(token, site_id, list_id, metrics):
 # GET LAST 2 WEEKS (OPTIMIZED)
 # ==============================
 def get_recent_metrics(token, site_id, list_id):
-    now = pd.Timestamp.now(tz="UTC")
-    cutoff = (now - pd.Timedelta(days=14)).strftime("%Y-%m-%dT00:00:00Z")
-    
     url = (
-    f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items"
-    f"?$expand=fields"
-    f"&$filter=fields/WeekStart ge {cutoff}"
+        f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items"
+        f"?$expand=fields"
+        f"&$orderby=fields/WeekStart desc"
+        f"&$top=2"
     )
 
     res = requests.get(url, headers={"Authorization": f"Bearer {token}"})
@@ -276,16 +274,11 @@ def get_recent_metrics(token, site_id, list_id):
             "OffboardingCompleted": int(f.get("OffboardingCompleted", 0)),
         })
 
-    df = pd.DataFrame(rows)
-
-    if df.empty:
+    if not rows:
         return None, None
 
-    df["WeekStart"] = pd.to_datetime(df["WeekStart"])
-    df = df.sort_values("WeekStart", ascending=False)
-
-    current = df.iloc[0].to_dict()
-    previous = df.iloc[1].to_dict() if len(df) > 1 else None
+    current = rows[0]
+    previous = rows[1] if len(rows) > 1 else None
 
     return current, previous
 
