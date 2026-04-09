@@ -301,48 +301,84 @@ def build_slack_blocks(current, previous=None):
         if prev is None:
             return ""
         delta = curr - prev
-        sign = "🟢 +" if delta >= 0 else "🔴 "
-        return f" ({sign}{delta})"
+        if delta > 0:
+            return f" 🟢 +{delta}"
+        elif delta < 0:
+            return f" 🔴 {delta}"
+        return " ⚪ 0"
 
-    blocks = [
+    def fmt_date(date_str):
+        return pd.to_datetime(date_str).strftime("%b %d, %Y")
+
+    return [
         {
             "type": "header",
             "text": {
                 "type": "plain_text",
-                "text": f"📊 Weekly IT Metrics ({current['WeekStart']})"
+                "text": f"📊 Weekly IT Metrics — {fmt_date(current['WeekStart'])}"
             }
         },
         {
-            "type": "divider"
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "Comparison vs previous week"
+                }
+            ]
+        },
+        {"type": "divider"},
+
+        # --- CORE METRICS ---
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": "*📌 Ticket Volume*"
+            }
         },
         {
             "type": "section",
             "fields": [
                 {
                     "type": "mrkdwn",
-                    "text": f"*Submitted*\n{current['Submitted']}{diff(current['Submitted'], previous['Submitted'] if previous else None)}"
+                    "text": f"*Submitted*\n*{current['Submitted']}*{diff(current['Submitted'], previous['Submitted'] if previous else None)}"
                 },
                 {
                     "type": "mrkdwn",
-                    "text": f"*Resolved*\n{current['Resolved']}{diff(current['Resolved'], previous['Resolved'] if previous else None)}"
+                    "text": f"*Resolved*\n*{current['Resolved']}*{diff(current['Resolved'], previous['Resolved'] if previous else None)}"
                 },
                 {
                     "type": "mrkdwn",
-                    "text": f"*Open*\n{current['Open']}{diff(current['Open'], previous['Open'] if previous else None)}"
+                    "text": f"*Open*\n*{current['Open']}*{diff(current['Open'], previous['Open'] if previous else None)}"
+                }
+            ]
+        },
+
+        {"type": "divider"},
+
+        # --- OPERATIONS ---
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": "*👥 Employee Operations*"
+            }
+        },
+        {
+            "type": "section",
+            "fields": [
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Onboarding*\n*{current['OnboardingCompleted']}*{diff(current['OnboardingCompleted'], previous['OnboardingCompleted'] if previous else None)}"
                 },
                 {
                     "type": "mrkdwn",
-                    "text": f"*Onboarding*\n{current['OnboardingCompleted']}{diff(current['OnboardingCompleted'], previous['OnboardingCompleted'] if previous else None)}"
-                },
-                {
-                    "type": "mrkdwn",
-                    "text": f"*Offboarding*\n{current['OffboardingCompleted']}{diff(current['OffboardingCompleted'], previous['OffboardingCompleted'] if previous else None)}"
+                    "text": f"*Offboarding*\n*{current['OffboardingCompleted']}*{diff(current['OffboardingCompleted'], previous['OffboardingCompleted'] if previous else None)}"
                 }
             ]
         }
     ]
-
-    return blocks
 
 
 def send_to_slack(blocks):
