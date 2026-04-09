@@ -301,20 +301,45 @@ def build_slack_blocks(current, previous=None):
         sign = "🟢 +" if delta >= 0 else "🔴 "
         return f" ({sign}{delta})"
 
-    return [
-        {"type": "header", "text": {"type": "plain_text", "text": f"📊 Weekly IT Metrics ({current['WeekStart']})"}},
-        {"type": "divider"},
+    blocks = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"📊 Weekly IT Metrics ({current['WeekStart']})"
+            }
+        },
+        {
+            "type": "divider"
+        },
         {
             "type": "section",
             "fields": [
-                {"type": "mrkdwn", "text": f"*Submitted*\n{current['Submitted']}{diff(current['Submitted'], previous['Submitted'] if previous else None)}"},
-                {"type": "mrkdwn", "text": f"*Resolved*\n{current['Resolved']}{diff(current['Resolved'], previous['Resolved'] if previous else None)}"},
-                {"type": "mrkdwn", "text": f"*Open*\n{current['Open']}{diff(current['Open'], previous['Open'] if previous else None)}"},
-                {"type": "mrkdwn", "text": f"*Onboarding*\n{current['OnboardingCompleted']}{diff(current['OnboardingCompleted'], previous['OnboardingCompleted'] if previous else None)}"},
-                {"type": "mrkdwn", "text": f"*Offboarding*\n{current['OffboardingCompleted']}{diff(current['OffboardingCompleted'], previous['OffboardingCompleted'] if previous else None)}"},
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Submitted*\n{current['Submitted']}{diff(current['Submitted'], previous['Submitted'] if previous else None)}"
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Resolved*\n{current['Resolved']}{diff(current['Resolved'], previous['Resolved'] if previous else None)}"
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Open*\n{current['Open']}{diff(current['Open'], previous['Open'] if previous else None)}"
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Onboarding*\n{current['OnboardingCompleted']}{diff(current['OnboardingCompleted'], previous['OnboardingCompleted'] if previous else None)}"
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Offboarding*\n{current['OffboardingCompleted']}{diff(current['OffboardingCompleted'], previous['OffboardingCompleted'] if previous else None)}"
+                }
             ]
         }
-    }
+    ]
+
+    return blocks
 
 
 def send_to_slack(blocks):
