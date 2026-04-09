@@ -16,6 +16,7 @@ SP_CLIENT_SECRET = os.environ["SP_CLIENT_SECRET"]
 
 SP_SITE_HOSTNAME = os.environ["SP_SITE_HOSTNAME"]
 SP_SITE_PATH = os.environ["SP_SITE_PATH"]
+SP_LIST_URL = os.environ["SP_LIST_URL"]
 
 SLACK_WEBHOOK_URL = os.environ["SLACK_WEBHOOK_URL"]
 
@@ -297,42 +298,12 @@ def get_recent_metrics(token, site_id, list_id):
 # SLACK
 # ==============================
 
+
 def format_date(date_str):
     dt = pd.to_datetime(date_str)
     return dt.strftime("%b %d, %Y")   # Apr 06, 2026
 
-def build_slack_blocks(current, previous=None):
-    def diff(curr, prev):
-        if prev is None:
-            return ""
-        delta = curr - prev
-        if delta > 0:
-            return f" 🟢 +{delta}"
-        elif delta < 0:
-            return f" 🔴 {delta}"
-        return " ⚪ 0"
-
-    def trend_summary():
-        if not previous:
-            return "No previous data for comparison."
-
-        summary = []
-
-        if current["Resolved"] > previous["Resolved"]:
-            summary.append("Resolution improved")
-        elif current["Resolved"] < previous["Resolved"]:
-            summary.append("Resolution slowed")
-
-        if current["Open"] > previous["Open"]:
-            summary.append("Backlog increased")
-        elif current["Open"] < previous["Open"]:
-            summary.append("Backlog reduced")
-
-        if not summary:
-            return "No significant changes vs last week"
-
-        return " • ".join(summary)
-
+def build_slack_blocks(current, list_url):
     week_label = pd.to_datetime(current["WeekStart"]).strftime("%b %d, %Y")
 
     return [
@@ -346,19 +317,6 @@ def build_slack_blocks(current, previous=None):
                 "text": f"📊 Weekly IT Report — {week_label}"
             }
         },
-
-        # ==============================
-        # SUMMARY
-        # ==============================
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"*Summary*\n{trend_summary()}"
-            }
-        },
-
-        {"type": "divider"},
 
         # ==============================
         # TICKET ACTIVITY
@@ -375,12 +333,9 @@ def build_slack_blocks(current, previous=None):
             "text": {
                 "type": "mrkdwn",
                 "text": (
-                    f"*New Requests:* {current['Submitted']}"
-                    f"{diff(current['Submitted'], previous['Submitted'] if previous else None)}\n\n"
-                    f"*Resolved:* {current['Resolved']}"
-                    f"{diff(current['Resolved'], previous['Resolved'] if previous else None)}\n\n"
+                    f"*New Requests:* {current['Submitted']}\n\n"
+                    f"*Resolved:* {current['Resolved']}\n\n"
                     f"*Open Backlog:* {current['Open']}"
-                    f"{diff(current['Open'], previous['Open'] if previous else None)}"
                 )
             }
         },
@@ -402,10 +357,8 @@ def build_slack_blocks(current, previous=None):
             "text": {
                 "type": "mrkdwn",
                 "text": (
-                    f"*Onboarding Completed:* {current['OnboardingCompleted']}"
-                    f"{diff(current['OnboardingCompleted'], previous['OnboardingCompleted'] if previous else None)}\n\n"
+                    f"*Onboarding Completed:* {current['OnboardingCompleted']}\n\n"
                     f"*Offboarding Completed:* {current['OffboardingCompleted']}"
-                    f"{diff(current['OffboardingCompleted'], previous['OffboardingCompleted'] if previous else None)}"
                 )
             }
         },
@@ -413,18 +366,23 @@ def build_slack_blocks(current, previous=None):
         {"type": "divider"},
 
         # ==============================
-        # FOOTER
+        # FOOTER / CONTEXT WITH LINK
         # ==============================
         {
             "type": "context",
             "elements": [
                 {
                     "type": "mrkdwn",
-                    "text": "Data source: Jira • Automated weekly report"
+                    "text": (
+                        "📌 *Need more detail?* "
+                        f"<{list_url}|View the full ticket list>\n"
+                        "Data source: Jira • Automated weekly report"
+                    )
                 }
             ]
         }
     ]
+``
 
 
 def send_to_slack(blocks):
@@ -466,7 +424,7 @@ if __name__ == "__main__":
     current, previous = get_recent_metrics(token, site_id, list_id)
 
     # Send Slack message
-    blocks = build_slack_blocks(current, previous)
+    blocks = build_slack_blocks(current, SP_LIST_URL)
     send_to_slack(blocks)
 
     print("🎉 DONE")
