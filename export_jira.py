@@ -296,6 +296,11 @@ def get_recent_metrics(token, site_id, list_id):
 # ==============================
 # SLACK
 # ==============================
+
+def format_date(date_str):
+    dt = pd.to_datetime(date_str)
+    return dt.strftime("%b %d, %Y")   # Apr 06, 2026
+
 def build_slack_blocks(current, previous=None):
     def diff(curr, prev):
         if prev is None:
@@ -315,7 +320,7 @@ def build_slack_blocks(current, previous=None):
             "type": "header",
             "text": {
                 "type": "plain_text",
-                "text": f"📊 Weekly IT Metrics — {fmt_date(current['WeekStart'])}"
+                "text": f"📊 Weekly IT Metrics ({format_date(current['WeekStart'])})"
             }
         },
         {
