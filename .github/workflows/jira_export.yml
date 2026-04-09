@@ -44,6 +44,7 @@ jobs:
           SP_SITE_HOSTNAME: ${{ secrets.SP_SITE_HOSTNAME }}
           SP_SITE_PATH: ${{ secrets.SP_SITE_PATH }}
           SP_LIBRARY_NAME: ${{ secrets.SP_LIBRARY_NAME }}
+          SP_LIST_URL: ${{ secrets.SP_LIST_URL }}
 
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
