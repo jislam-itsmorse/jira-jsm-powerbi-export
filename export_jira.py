@@ -348,20 +348,20 @@ def build_slack_blocks(current, previous=None):
         },
 
         # ==============================
-        # EXEC SUMMARY
+        # SUMMARY
         # ==============================
         {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*Summary:*\n{trend_summary()}"
+                "text": f"*Summary*\n{trend_summary()}"
             }
         },
 
         {"type": "divider"},
 
         # ==============================
-        # TICKET VOLUME
+        # TICKET ACTIVITY
         # ==============================
         {
             "type": "section",
@@ -372,26 +372,23 @@ def build_slack_blocks(current, previous=None):
         },
         {
             "type": "section",
-            "fields": [
-                {
-                    "type": "mrkdwn",
-                    "text": f"*New Requests*\n*{current['Submitted']}*{diff(current['Submitted'], previous['Submitted'] if previous else None)}"
-                },
-                {
-                    "type": "mrkdwn",
-                    "text": f"*Resolved*\n*{current['Resolved']}*{diff(current['Resolved'], previous['Resolved'] if previous else None)}"
-                },
-                {
-                    "type": "mrkdwn",
-                    "text": f"*Open Backlog*\n*{current['Open']}*{diff(current['Open'], previous['Open'] if previous else None)}"
-                }
-            ]
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    f"*New Requests:* {current['Submitted']}"
+                    f"{diff(current['Submitted'], previous['Submitted'] if previous else None)}\n\n"
+                    f"*Resolved:* {current['Resolved']}"
+                    f"{diff(current['Resolved'], previous['Resolved'] if previous else None)}\n\n"
+                    f"*Open Backlog:* {current['Open']}"
+                    f"{diff(current['Open'], previous['Open'] if previous else None)}"
+                )
+            }
         },
 
         {"type": "divider"},
 
         # ==============================
-        # EMPLOYEE OPERATIONS
+        # EMPLOYEE LIFECYCLE OPS
         # ==============================
         {
             "type": "section",
@@ -402,29 +399,28 @@ def build_slack_blocks(current, previous=None):
         },
         {
             "type": "section",
-            "fields": [
-                {
-                    "type": "mrkdwn",
-                    "text": f"*Onboarding Completed*\n*{current['OnboardingCompleted']}*{diff(current['OnboardingCompleted'], previous['OnboardingCompleted'] if previous else None)}"
-                },
-                {
-                    "type": "mrkdwn",
-                    "text": f"*Offboarding Completed*\n*{current['OffboardingCompleted']}*{diff(current['OffboardingCompleted'], previous['OffboardingCompleted'] if previous else None)}"
-                }
-            ]
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    f"*Onboarding Completed:* {current['OnboardingCompleted']}"
+                    f"{diff(current['OnboardingCompleted'], previous['OnboardingCompleted'] if previous else None)}\n\n"
+                    f"*Offboarding Completed:* {current['OffboardingCompleted']}"
+                    f"{diff(current['OffboardingCompleted'], previous['OffboardingCompleted'] if previous else None)}"
+                )
+            }
         },
 
         {"type": "divider"},
 
         # ==============================
-        # FOOTER / CONTEXT
+        # FOOTER
         # ==============================
         {
             "type": "context",
             "elements": [
                 {
                     "type": "mrkdwn",
-                    "text": "Data source: Jira • Automated report"
+                    "text": "Data source: Jira • Automated weekly report"
                 }
             ]
         }
