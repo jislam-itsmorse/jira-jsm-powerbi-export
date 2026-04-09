@@ -17,6 +17,8 @@ SP_CLIENT_SECRET = os.environ["SP_CLIENT_SECRET"]
 SP_SITE_HOSTNAME = os.environ["SP_SITE_HOSTNAME"]
 SP_SITE_PATH = os.environ["SP_SITE_PATH"]
 
+SLACK_WEBHOOK_URL = os.environ["SLACK_WEBHOOK_URL"]
+
 # ==============================
 # CONFIG
 # ==============================
@@ -70,10 +72,9 @@ def fetch_jira_issues(jql):
         )
 
         res.raise_for_status()
-
         data = res.json()
-        issues = data.get("issues", [])
 
+        issues = data.get("issues", [])
         all_issues.extend(issues)
 
         if start_at + 100 >= data.get("total", 0):
@@ -169,7 +170,7 @@ def compute_weekly_metrics(df_activity, df_backlog):
 
 
 # ==============================
-# GRAPH
+# GRAPH AUTH
 # ==============================
 def get_graph_token():
     url = f"https://login.microsoftonline.com/{SP_TENANT_ID}/oauth2/v2.0/token"
@@ -201,11 +202,11 @@ def graph_get_list_id(token, site_id, list_name):
         if l["name"] == list_name:
             return l["id"]
 
-    raise Exception(f"❌ List '{list_name}' not found")
+    raise Exception(f"List '{list_name}' not found")
 
 
 # ==============================
-# UPSERT (SINGLE LIST)
+# UPSERT
 # ==============================
 def upsert_metrics(token, site_id, list_id, metrics):
     week = metrics["WeekStart"]
@@ -226,13 +227,10 @@ def upsert_metrics(token, site_id, list_id, metrics):
                     "Authorization": f"Bearer {token}",
                     "Content-Type": "application/json"
                 },
-                json={
-                    "Title": f"Week {week}",
-                    **metrics
-                }
+                json={"Title": f"Week {week}", **metrics}
             )
 
-            print(f"♻️ Updated week {week}")
+            print(f"Updated week {week}")
             return
 
     create_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items"
@@ -243,20 +241,97 @@ def upsert_metrics(token, site_id, list_id, metrics):
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         },
-        json={"fields": {
-            "Title": f"Week {week}",
-            **metrics
-        }}
+        json={"fields": {"Title": f"Week {week}", **metrics}}
     )
 
-    print(f"✅ Created week {week}")
+    print(f"Created week {week}")
+
+
+# ==============================
+# GET LAST 2 WEEKS (OPTIMIZED)
+# ==============================
+def get_recent_metrics(token, site_id, list_id):
+    now = pd.Timestamp.now(tz="UTC")
+    cutoff = (now - pd.Timedelta(days=14)).strftime("%Y-%m-%d")
+
+    url = (
+        f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items"
+        f"?$expand=fields"
+        f"&$filter=fields/WeekStart ge '{cutoff}'"
+    )
+
+    res = requests.get(url, headers={"Authorization": f"Bearer {token}"})
+    res.raise_for_status()
+
+    rows = []
+    for item in res.json()["value"]:
+        f = item["fields"]
+
+        rows.append({
+            "WeekStart": f.get("WeekStart"),
+            "Submitted": int(f.get("Submitted", 0)),
+            "Resolved": int(f.get("Resolved", 0)),
+            "Open": int(f.get("Open", 0)),
+            "OnboardingCompleted": int(f.get("OnboardingCompleted", 0)),
+            "OffboardingCompleted": int(f.get("OffboardingCompleted", 0)),
+        })
+
+    df = pd.DataFrame(rows)
+
+    if df.empty:
+        return None, None
+
+    df["WeekStart"] = pd.to_datetime(df["WeekStart"])
+    df = df.sort_values("WeekStart", ascending=False)
+
+    current = df.iloc[0].to_dict()
+    previous = df.iloc[1].to_dict() if len(df) > 1 else None
+
+    return current, previous
+
+
+# ==============================
+# SLACK
+# ==============================
+def build_slack_blocks(current, previous=None):
+    def diff(curr, prev):
+        if prev is None:
+            return ""
+        delta = curr - prev
+        sign = "🟢 +" if delta >= 0 else "🔴 "
+        return f" ({sign}{delta})"
+
+    return [
+        {"type": "header", "text": {"type": "plain_text", "text": f"📊 Weekly IT Metrics ({current['WeekStart']})"}},
+        {"type": "divider"},
+        {
+            "type": "section",
+            "fields": [
+                {"type": "mrkdwn", "text": f"*Submitted*\n{current['Submitted']}{diff(current['Submitted'], previous['Submitted'] if previous else None)}"},
+                {"type": "mrkdwn", "text": f"*Resolved*\n{current['Resolved']}{diff(current['Resolved'], previous['Resolved'] if previous else None)}"},
+                {"type": "mrkdwn", "text": f"*Open*\n{current['Open']}{diff(current['Open'], previous['Open'] if previous else None)}"},
+                {"type": "mrkdwn", "text": f"*Onboarding*\n{current['OnboardingCompleted']}{diff(current['OnboardingCompleted'], previous['OnboardingCompleted'] if previous else None)}"},
+                {"type": "mrkdwn", "text": f"*Offboarding*\n{current['OffboardingCompleted']}{diff(current['OffboardingCompleted'], previous['OffboardingCompleted'] if previous else None)}"},
+            ]
+        }
+    }
+
+
+def send_to_slack(blocks):
+    res = requests.post(
+        SLACK_WEBHOOK_URL,
+        json={"blocks": blocks},
+        headers={"Content-Type": "application/json"}
+    )
+    res.raise_for_status()
+    print("Slack message sent")
 
 
 # ==============================
 # MAIN
 # ==============================
 if __name__ == "__main__":
-    print("🚀 Jira → SharePoint (Single Table Metrics)")
+    print("🚀 Jira → SharePoint → Slack")
 
     issues_activity = fetch_jira_issues(JIRA_QUERY_ACTIVITY)
     issues_backlog = fetch_jira_issues(JIRA_QUERY_BACKLOG)
@@ -267,14 +342,21 @@ if __name__ == "__main__":
     metrics = compute_weekly_metrics(df_activity, df_backlog)
 
     if not metrics:
-        print("⚠️ No metrics")
+        print("No metrics")
         exit()
 
     token = get_graph_token()
     site_id = graph_get_site_id(token)
-
     list_id = graph_get_list_id(token, site_id, "Weekly Ticket Metrics")
 
+    # Upsert current week
     upsert_metrics(token, site_id, list_id, metrics)
+
+    # Fetch last 2 weeks using FILTER
+    current, previous = get_recent_metrics(token, site_id, list_id)
+
+    # Send Slack message
+    blocks = build_slack_blocks(current, previous)
+    send_to_slack(blocks)
 
     print("🎉 DONE")
