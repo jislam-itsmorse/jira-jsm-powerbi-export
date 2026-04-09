@@ -252,12 +252,12 @@ def upsert_metrics(token, site_id, list_id, metrics):
 # ==============================
 def get_recent_metrics(token, site_id, list_id):
     now = pd.Timestamp.now(tz="UTC")
-    cutoff = (now - pd.Timedelta(days=14)).strftime("%Y-%m-%d")
-
+    cutoff = (now - pd.Timedelta(days=14)).strftime("%Y-%m-%dT00:00:00Z")
+    
     url = (
-        f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items"
-        f"?$expand=fields"
-        f"&$filter=fields/WeekStart ge '{cutoff}'"
+    f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items"
+    f"?$expand=fields"
+    f"&$filter=fields/WeekStart ge {cutoff}"
     )
 
     res = requests.get(url, headers={"Authorization": f"Bearer {token}"})
