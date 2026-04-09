@@ -382,7 +382,6 @@ def build_slack_blocks(current, list_url):
             ]
         }
     ]
-``
 
 
 def send_to_slack(blocks):
