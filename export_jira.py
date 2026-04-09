@@ -304,7 +304,13 @@ def format_date(date_str):
     return dt.strftime("%b %d, %Y")   # Apr 06, 2026
 
 def build_slack_blocks(current, list_url):
-    week_label = pd.to_datetime(current["WeekStart"]).strftime("%b %d, %Y")
+    week_start_dt = pd.to_datetime(current["WeekStart"])
+    week_end_dt = week_start_dt + pd.Timedelta(days=6)
+
+    week_label = (
+        f"{week_start_dt.strftime('%b %d, %Y')} – "
+        f"{week_end_dt.strftime('%b %d, %Y')}"
+    )
 
     return [
         # ==============================
@@ -366,7 +372,7 @@ def build_slack_blocks(current, list_url):
         {"type": "divider"},
 
         # ==============================
-        # FOOTER / CONTEXT WITH LINK
+        # FOOTER
         # ==============================
         {
             "type": "context",
