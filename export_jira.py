@@ -312,34 +312,62 @@ def build_slack_blocks(current, previous=None):
             return f" 🔴 {delta}"
         return " ⚪ 0"
 
-    def fmt_date(date_str):
-        return pd.to_datetime(date_str).strftime("%b %d, %Y")
+    def trend_summary():
+        if not previous:
+            return "No previous data for comparison."
+
+        summary = []
+
+        if current["Resolved"] > previous["Resolved"]:
+            summary.append("Resolution improved")
+        elif current["Resolved"] < previous["Resolved"]:
+            summary.append("Resolution slowed")
+
+        if current["Open"] > previous["Open"]:
+            summary.append("Backlog increased")
+        elif current["Open"] < previous["Open"]:
+            summary.append("Backlog reduced")
+
+        if not summary:
+            return "No significant changes vs last week"
+
+        return " • ".join(summary)
+
+    week_label = pd.to_datetime(current["WeekStart"]).strftime("%b %d, %Y")
 
     return [
+        # ==============================
+        # HEADER
+        # ==============================
         {
             "type": "header",
             "text": {
                 "type": "plain_text",
-                "text": f"📊 Weekly IT Metrics ({format_date(current['WeekStart'])})"
+                "text": f"📊 Weekly IT Report — {week_label}"
             }
         },
-        {
-            "type": "context",
-            "elements": [
-                {
-                    "type": "mrkdwn",
-                    "text": "Comparison vs previous week"
-                }
-            ]
-        },
-        {"type": "divider"},
 
-        # --- CORE METRICS ---
+        # ==============================
+        # EXEC SUMMARY
+        # ==============================
         {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": "*📌 Ticket Volume*"
+                "text": f"*Summary:*\n{trend_summary()}"
+            }
+        },
+
+        {"type": "divider"},
+
+        # ==============================
+        # TICKET VOLUME
+        # ==============================
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": "*🎫 Ticket Activity*"
             }
         },
         {
@@ -347,7 +375,7 @@ def build_slack_blocks(current, previous=None):
             "fields": [
                 {
                     "type": "mrkdwn",
-                    "text": f"*Submitted*\n*{current['Submitted']}*{diff(current['Submitted'], previous['Submitted'] if previous else None)}"
+                    "text": f"*New Requests*\n*{current['Submitted']}*{diff(current['Submitted'], previous['Submitted'] if previous else None)}"
                 },
                 {
                     "type": "mrkdwn",
@@ -355,19 +383,21 @@ def build_slack_blocks(current, previous=None):
                 },
                 {
                     "type": "mrkdwn",
-                    "text": f"*Open*\n*{current['Open']}*{diff(current['Open'], previous['Open'] if previous else None)}"
+                    "text": f"*Open Backlog*\n*{current['Open']}*{diff(current['Open'], previous['Open'] if previous else None)}"
                 }
             ]
         },
 
         {"type": "divider"},
 
-        # --- OPERATIONS ---
+        # ==============================
+        # EMPLOYEE OPERATIONS
+        # ==============================
         {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": "*👥 Employee Operations*"
+                "text": "*👥 Employee Lifecycle Ops*"
             }
         },
         {
@@ -375,11 +405,26 @@ def build_slack_blocks(current, previous=None):
             "fields": [
                 {
                     "type": "mrkdwn",
-                    "text": f"*Onboarding*\n*{current['OnboardingCompleted']}*{diff(current['OnboardingCompleted'], previous['OnboardingCompleted'] if previous else None)}"
+                    "text": f"*Onboarding Completed*\n*{current['OnboardingCompleted']}*{diff(current['OnboardingCompleted'], previous['OnboardingCompleted'] if previous else None)}"
                 },
                 {
                     "type": "mrkdwn",
-                    "text": f"*Offboarding*\n*{current['OffboardingCompleted']}*{diff(current['OffboardingCompleted'], previous['OffboardingCompleted'] if previous else None)}"
+                    "text": f"*Offboarding Completed*\n*{current['OffboardingCompleted']}*{diff(current['OffboardingCompleted'], previous['OffboardingCompleted'] if previous else None)}"
+                }
+            ]
+        },
+
+        {"type": "divider"},
+
+        # ==============================
+        # FOOTER / CONTEXT
+        # ==============================
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "Data source: Jira • Automated report"
                 }
             ]
         }
