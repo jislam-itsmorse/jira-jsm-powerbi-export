@@ -254,8 +254,6 @@ def get_recent_metrics(token, site_id, list_id):
     url = (
         f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items"
         f"?$expand=fields"
-        f"&$orderby=fields/WeekStart desc"
-        f"&$top=2"
     )
 
     res = requests.get(url, headers={"Authorization": f"Bearer {token}"})
@@ -265,8 +263,12 @@ def get_recent_metrics(token, site_id, list_id):
     for item in res.json()["value"]:
         f = item["fields"]
 
+        week = f.get("WeekStart")
+        if not week:
+            continue
+
         rows.append({
-            "WeekStart": f.get("WeekStart"),
+            "WeekStart": week,
             "Submitted": int(f.get("Submitted", 0)),
             "Resolved": int(f.get("Resolved", 0)),
             "Open": int(f.get("Open", 0)),
@@ -277,8 +279,16 @@ def get_recent_metrics(token, site_id, list_id):
     if not rows:
         return None, None
 
-    current = rows[0]
-    previous = rows[1] if len(rows) > 1 else None
+    # 🔥 Use pandas for reliable sorting
+    df = pd.DataFrame(rows)
+
+    df["WeekStart"] = pd.to_datetime(df["WeekStart"], errors="coerce")
+    df = df.dropna(subset=["WeekStart"])
+
+    df = df.sort_values("WeekStart", ascending=False)
+
+    current = df.iloc[0].to_dict()
+    previous = df.iloc[1].to_dict() if len(df) > 1 else None
 
     return current, previous
 
