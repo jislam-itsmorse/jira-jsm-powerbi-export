@@ -381,7 +381,7 @@ def build_slack_blocks(current, list_url):
                     "type": "mrkdwn",
                     "text": (
                         "📌 *Need more detail?* "
-                        f"<{list_url}|View the full ticket list>\n"
+                        f"<{list_url}|View the full report list>\n"
                         "Data source: Jira • Automated weekly report"
                     )
                 }
