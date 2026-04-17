@@ -204,6 +204,7 @@ def graph_get_list_id(token, site_id, list_name):
 # ==============================
 def upsert_metrics(token, site_id, list_id, metrics):
     week = metrics["WeekStart"]
+    title = f"IT Report | {metrics['WeekStart']} → {metrics['WeekEnd']}"
 
     url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items?$expand=fields"
     res = requests.get(url, headers={"Authorization": f"Bearer {token}"})
@@ -212,7 +213,6 @@ def upsert_metrics(token, site_id, list_id, metrics):
     for item in res.json()["value"]:
         if item["fields"].get("WeekStart") == week:
             item_id = item["id"]
-
             update_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items/{item_id}/fields"
 
             requests.patch(
@@ -221,10 +221,9 @@ def upsert_metrics(token, site_id, list_id, metrics):
                     "Authorization": f"Bearer {token}",
                     "Content-Type": "application/json"
                 },
-                json={"Title": f"Week {week}", **metrics}
+                json={"Title": title, **metrics}
             )
-
-            print(f"Updated week {week}")
+            print(f"Updated: {title}")
             return
 
     create_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_id}/items"
@@ -235,10 +234,10 @@ def upsert_metrics(token, site_id, list_id, metrics):
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         },
-        json={"fields": {"Title": f"Week {week}", **metrics}}
+        json={"fields": {"Title": title, **metrics}}
     )
 
-    print(f"Created week {week}")
+    print(f"Created: {title}")
 
 
 # ==============================
