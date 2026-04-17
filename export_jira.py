@@ -393,9 +393,10 @@ if __name__ == "__main__":
 
     upsert_metrics(token, site_id, list_id, metrics)
 
-    current, previous = get_recent_metrics(token, site_id, list_id)
-
-    blocks = build_slack_blocks(current, SP_LIST_URL)
+    # ✅ Use metrics directly instead of re-fetching from SharePoint
+    # get_recent_metrics was returning None because the WeekStart format
+    # with datetime string wasn't matching on read-back
+    blocks = build_slack_blocks(metrics, SP_LIST_URL)
     send_to_slack(blocks)
 
     print("🎉 DONE")
