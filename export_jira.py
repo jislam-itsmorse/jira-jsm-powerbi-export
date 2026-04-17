@@ -122,11 +122,9 @@ def compute_weekly_metrics(df_activity, df_backlog):
 
     now = pd.Timestamp.now(tz="UTC")
 
-    # Script runs every Friday at 12:00
-    # Window: last Friday 12:01 → this Friday 12:00 (now)
-    days_since_last_friday = 7  # always exactly 7 days ago since we run on Friday
+    days_since_last_friday = 7
     last_friday = (now - pd.Timedelta(days=days_since_last_friday)).normalize() + pd.Timedelta(hours=12, minutes=1)
-    this_friday = now.normalize() + pd.Timedelta(hours=12)  # Friday 12:00
+    this_friday = now.normalize() + pd.Timedelta(hours=12)
 
     window_start = last_friday
     window_end = this_friday
@@ -154,8 +152,9 @@ def compute_weekly_metrics(df_activity, df_backlog):
     ].shape[0]
 
     return {
-        "WeekStart": window_start.strftime("%Y-%m-%d %H:%M"),
-        "WeekEnd": window_end.strftime("%Y-%m-%d %H:%M"),
+        # ✅ Date-only strings so SharePoint accepts them cleanly
+        "WeekStart": window_start.strftime("%Y-%m-%d"),
+        "WeekEnd": window_end.strftime("%Y-%m-%d"),
         "Submitted": int(submitted),
         "Resolved": int(resolved),
         "Open": int(open_count),
