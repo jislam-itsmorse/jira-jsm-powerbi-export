@@ -31,18 +31,22 @@ FIELDS = [
     REQUEST_TYPE_FIELD
 ]
 
+# ✅ FIX 1: Removed request type filter — fetch ALL tickets from the project
+# so that submitted/resolved counts are not artificially restricted.
+# The -30d window is kept to avoid pulling the full history.
 JIRA_QUERY_ACTIVITY = """
 project = ISD
 AND statusCategory = Done
-AND "Request Type" IN (
-    "Employee offboarding",
-    "Onboard new employees",
-    "IT Request"
-)
 AND (
     created >= -30d
     OR resolved >= -30d
 )
+"""
+
+# ✅ Also fetch created-but-not-done tickets in the last 30d for submitted count
+JIRA_QUERY_CREATED = """
+project = ISD
+AND created >= -30d
 """
 
 JIRA_QUERY_BACKLOG = """
@@ -122,46 +126,42 @@ def issues_to_dataframe(issues):
 # ==============================
 # METRICS
 # ==============================
-def compute_weekly_metrics(df_activity, df_backlog):
-    if df_activity.empty and df_backlog.empty:
-        return None
-
+def compute_weekly_metrics(df_created, df_resolved, df_backlog):
     now = pd.Timestamp.now(tz="UTC")
 
-    week_start = now - pd.Timedelta(days=now.weekday())
-    week_start = week_start.normalize()
+    # ✅ FIX 2: Rolling 7-day window ending now, instead of Mon–Mon calendar week
+    window_end = now
+    window_start = now - pd.Timedelta(days=7)
 
-    week_end = week_start + pd.Timedelta(days=6, hours=23, minutes=59, seconds=59)
-
-    submitted = df_activity[
-        (df_activity["CreatedDate"] >= week_start) &
-        (df_activity["CreatedDate"] <= week_end)
+    # Submitted = any ticket created in the last 7 days (all types)
+    submitted = df_created[
+        (df_created["CreatedDate"] >= window_start) &
+        (df_created["CreatedDate"] <= window_end)
     ].shape[0]
 
-    resolved = df_activity[
-        (df_activity["ResolvedDate"].notna()) &
-        (df_activity["ResolvedDate"] >= week_start) &
-        (df_activity["ResolvedDate"] <= week_end)
-    ].shape[0]
+    # Resolved = any ticket resolved in the last 7 days (all types)
+    resolved_df = df_resolved[
+        (df_resolved["ResolvedDate"].notna()) &
+        (df_resolved["ResolvedDate"] >= window_start) &
+        (df_resolved["ResolvedDate"] <= window_end)
+    ]
+    resolved = resolved_df.shape[0]
 
     open_count = df_backlog.shape[0]
 
-    onboarding_completed = df_activity[
-        (df_activity["RequestType"] == "Onboard new employees") &
-        (df_activity["ResolvedDate"].notna()) &
-        (df_activity["ResolvedDate"] >= week_start) &
-        (df_activity["ResolvedDate"] <= week_end)
+    # ✅ FIX 3: Onboarding/Offboarding are subsets of total resolved tickets
+    onboarding_completed = resolved_df[
+        resolved_df["RequestType"] == "Onboard new employees"
     ].shape[0]
 
-    offboarding_completed = df_activity[
-        (df_activity["RequestType"] == "Employee offboarding") &
-        (df_activity["ResolvedDate"].notna()) &
-        (df_activity["ResolvedDate"] >= week_start) &
-        (df_activity["ResolvedDate"] <= week_end)
+    offboarding_completed = resolved_df[
+        resolved_df["RequestType"] == "Employee offboarding"
     ].shape[0]
+
+    week_start_label = window_start.strftime("%Y-%m-%d")
 
     return {
-        "WeekStart": week_start.strftime("%Y-%m-%d"),
+        "WeekStart": week_start_label,
         "Submitted": int(submitted),
         "Resolved": int(resolved),
         "Open": int(open_count),
@@ -249,7 +249,7 @@ def upsert_metrics(token, site_id, list_id, metrics):
 
 
 # ==============================
-# GET LAST 2 WEEKS (OPTIMIZED)
+# GET LAST 2 WEEKS
 # ==============================
 def get_recent_metrics(token, site_id, list_id):
     url = (
@@ -280,12 +280,9 @@ def get_recent_metrics(token, site_id, list_id):
     if not rows:
         return None, None
 
-    # 🔥 Use pandas for reliable sorting
     df = pd.DataFrame(rows)
-
     df["WeekStart"] = pd.to_datetime(df["WeekStart"], errors="coerce")
     df = df.dropna(subset=["WeekStart"])
-
     df = df.sort_values("WeekStart", ascending=False)
 
     current = df.iloc[0].to_dict()
@@ -297,15 +294,13 @@ def get_recent_metrics(token, site_id, list_id):
 # ==============================
 # SLACK
 # ==============================
-
-
 def format_date(date_str):
     dt = pd.to_datetime(date_str)
-    return dt.strftime("%b %d, %Y")   # Apr 06, 2026
+    return dt.strftime("%b %d, %Y")
 
 def build_slack_blocks(current, list_url):
     week_start_dt = pd.to_datetime(current["WeekStart"])
-    week_end_dt = week_start_dt + pd.Timedelta(days=6)
+    week_end_dt = week_start_dt + pd.Timedelta(days=7)
 
     week_label = (
         f"{week_start_dt.strftime('%b %d, %Y')} – "
@@ -313,9 +308,6 @@ def build_slack_blocks(current, list_url):
     )
 
     return [
-        # ==============================
-        # HEADER
-        # ==============================
         {
             "type": "header",
             "text": {
@@ -323,10 +315,6 @@ def build_slack_blocks(current, list_url):
                 "text": f"📊 Weekly IT Report — {week_label}"
             }
         },
-
-        # ==============================
-        # TICKET ACTIVITY
-        # ==============================
         {
             "type": "section",
             "text": {
@@ -345,12 +333,7 @@ def build_slack_blocks(current, list_url):
                 )
             }
         },
-
         {"type": "divider"},
-
-        # ==============================
-        # EMPLOYEE LIFECYCLE OPS
-        # ==============================
         {
             "type": "section",
             "text": {
@@ -368,12 +351,7 @@ def build_slack_blocks(current, list_url):
                 )
             }
         },
-
         {"type": "divider"},
-
-        # ==============================
-        # FOOTER
-        # ==============================
         {
             "type": "context",
             "elements": [
@@ -406,13 +384,16 @@ def send_to_slack(blocks):
 if __name__ == "__main__":
     print("🚀 Jira → SharePoint → Slack")
 
-    issues_activity = fetch_jira_issues(JIRA_QUERY_ACTIVITY)
+    # ✅ FIX: Separate queries for created and resolved, both covering all ticket types
+    issues_created = fetch_jira_issues(JIRA_QUERY_CREATED)
+    issues_resolved = fetch_jira_issues(JIRA_QUERY_ACTIVITY)
     issues_backlog = fetch_jira_issues(JIRA_QUERY_BACKLOG)
 
-    df_activity = issues_to_dataframe(issues_activity)
+    df_created = issues_to_dataframe(issues_created)
+    df_resolved = issues_to_dataframe(issues_resolved)
     df_backlog = issues_to_dataframe(issues_backlog)
 
-    metrics = compute_weekly_metrics(df_activity, df_backlog)
+    metrics = compute_weekly_metrics(df_created, df_resolved, df_backlog)
 
     if not metrics:
         print("No metrics")
@@ -422,13 +403,10 @@ if __name__ == "__main__":
     site_id = graph_get_site_id(token)
     list_id = graph_get_list_id(token, site_id, "Weekly Ticket Metrics")
 
-    # Upsert current week
     upsert_metrics(token, site_id, list_id, metrics)
 
-    # Fetch last 2 weeks using FILTER
     current, previous = get_recent_metrics(token, site_id, list_id)
 
-    # Send Slack message
     blocks = build_slack_blocks(current, SP_LIST_URL)
     send_to_slack(blocks)
 
