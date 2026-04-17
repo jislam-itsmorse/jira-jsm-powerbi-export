@@ -31,22 +31,12 @@ FIELDS = [
     REQUEST_TYPE_FIELD
 ]
 
-# ✅ FIX 1: Removed request type filter — fetch ALL tickets from the project
-# so that submitted/resolved counts are not artificially restricted.
-# The -30d window is kept to avoid pulling the full history.
 JIRA_QUERY_ACTIVITY = """
 project = ISD
-AND statusCategory = Done
 AND (
     created >= -30d
     OR resolved >= -30d
 )
-"""
-
-# ✅ Also fetch created-but-not-done tickets in the last 30d for submitted count
-JIRA_QUERY_CREATED = """
-project = ISD
-AND created >= -30d
 """
 
 JIRA_QUERY_BACKLOG = """
@@ -126,30 +116,30 @@ def issues_to_dataframe(issues):
 # ==============================
 # METRICS
 # ==============================
-def compute_weekly_metrics(df_created, df_resolved, df_backlog):
+def compute_weekly_metrics(df_activity, df_backlog):
+    if df_activity.empty and df_backlog.empty:
+        return None
+
     now = pd.Timestamp.now(tz="UTC")
 
-    # ✅ FIX 2: Rolling 7-day window ending now, instead of Mon–Mon calendar week
-    window_end = now
-    window_start = now - pd.Timedelta(days=7)
+    week_start = now - pd.Timedelta(days=now.weekday())
+    week_start = week_start.normalize()
+    week_end = week_start + pd.Timedelta(days=6, hours=23, minutes=59, seconds=59)
 
-    # Submitted = any ticket created in the last 7 days (all types)
-    submitted = df_created[
-        (df_created["CreatedDate"] >= window_start) &
-        (df_created["CreatedDate"] <= window_end)
+    submitted = df_activity[
+        (df_activity["CreatedDate"] >= week_start) &
+        (df_activity["CreatedDate"] <= week_end)
     ].shape[0]
 
-    # Resolved = any ticket resolved in the last 7 days (all types)
-    resolved_df = df_resolved[
-        (df_resolved["ResolvedDate"].notna()) &
-        (df_resolved["ResolvedDate"] >= window_start) &
-        (df_resolved["ResolvedDate"] <= window_end)
+    resolved_df = df_activity[
+        (df_activity["ResolvedDate"].notna()) &
+        (df_activity["ResolvedDate"] >= week_start) &
+        (df_activity["ResolvedDate"] <= week_end)
     ]
     resolved = resolved_df.shape[0]
 
     open_count = df_backlog.shape[0]
 
-    # ✅ FIX 3: Onboarding/Offboarding are subsets of total resolved tickets
     onboarding_completed = resolved_df[
         resolved_df["RequestType"] == "Onboard new employees"
     ].shape[0]
@@ -158,10 +148,8 @@ def compute_weekly_metrics(df_created, df_resolved, df_backlog):
         resolved_df["RequestType"] == "Employee offboarding"
     ].shape[0]
 
-    week_start_label = window_start.strftime("%Y-%m-%d")
-
     return {
-        "WeekStart": week_start_label,
+        "WeekStart": week_start.strftime("%Y-%m-%d"),
         "Submitted": int(submitted),
         "Resolved": int(resolved),
         "Open": int(open_count),
@@ -300,7 +288,7 @@ def format_date(date_str):
 
 def build_slack_blocks(current, list_url):
     week_start_dt = pd.to_datetime(current["WeekStart"])
-    week_end_dt = week_start_dt + pd.Timedelta(days=7)
+    week_end_dt = week_start_dt + pd.Timedelta(days=6)
 
     week_label = (
         f"{week_start_dt.strftime('%b %d, %Y')} – "
@@ -384,16 +372,13 @@ def send_to_slack(blocks):
 if __name__ == "__main__":
     print("🚀 Jira → SharePoint → Slack")
 
-    # ✅ FIX: Separate queries for created and resolved, both covering all ticket types
-    issues_created = fetch_jira_issues(JIRA_QUERY_CREATED)
-    issues_resolved = fetch_jira_issues(JIRA_QUERY_ACTIVITY)
+    issues_activity = fetch_jira_issues(JIRA_QUERY_ACTIVITY)
     issues_backlog = fetch_jira_issues(JIRA_QUERY_BACKLOG)
 
-    df_created = issues_to_dataframe(issues_created)
-    df_resolved = issues_to_dataframe(issues_resolved)
+    df_activity = issues_to_dataframe(issues_activity)
     df_backlog = issues_to_dataframe(issues_backlog)
 
-    metrics = compute_weekly_metrics(df_created, df_resolved, df_backlog)
+    metrics = compute_weekly_metrics(df_activity, df_backlog)
 
     if not metrics:
         print("No metrics")
