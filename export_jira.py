@@ -34,8 +34,8 @@ FIELDS = [
 JIRA_QUERY_ACTIVITY = """
 project = ISD
 AND (
-    created >= -30d
-    OR resolved >= -30d
+    created >= -8d
+    OR resolved >= -8d
 )
 """
 
@@ -122,19 +122,24 @@ def compute_weekly_metrics(df_activity, df_backlog):
 
     now = pd.Timestamp.now(tz="UTC")
 
-    week_start = now - pd.Timedelta(days=now.weekday())
-    week_start = week_start.normalize()
-    week_end = week_start + pd.Timedelta(days=6, hours=23, minutes=59, seconds=59)
+    # Script runs every Friday at 12:00
+    # Window: last Friday 12:01 → this Friday 12:00 (now)
+    days_since_last_friday = 7  # always exactly 7 days ago since we run on Friday
+    last_friday = (now - pd.Timedelta(days=days_since_last_friday)).normalize() + pd.Timedelta(hours=12, minutes=1)
+    this_friday = now.normalize() + pd.Timedelta(hours=12)  # Friday 12:00
+
+    window_start = last_friday
+    window_end = this_friday
 
     submitted = df_activity[
-        (df_activity["CreatedDate"] >= week_start) &
-        (df_activity["CreatedDate"] <= week_end)
+        (df_activity["CreatedDate"] >= window_start) &
+        (df_activity["CreatedDate"] <= window_end)
     ].shape[0]
 
     resolved_df = df_activity[
         (df_activity["ResolvedDate"].notna()) &
-        (df_activity["ResolvedDate"] >= week_start) &
-        (df_activity["ResolvedDate"] <= week_end)
+        (df_activity["ResolvedDate"] >= window_start) &
+        (df_activity["ResolvedDate"] <= window_end)
     ]
     resolved = resolved_df.shape[0]
 
@@ -149,7 +154,8 @@ def compute_weekly_metrics(df_activity, df_backlog):
     ].shape[0]
 
     return {
-        "WeekStart": week_start.strftime("%Y-%m-%d"),
+        "WeekStart": window_start.strftime("%Y-%m-%d %H:%M"),
+        "WeekEnd": window_end.strftime("%Y-%m-%d %H:%M"),
         "Submitted": int(submitted),
         "Resolved": int(resolved),
         "Open": int(open_count),
@@ -258,6 +264,7 @@ def get_recent_metrics(token, site_id, list_id):
 
         rows.append({
             "WeekStart": week,
+            "WeekEnd": f.get("WeekEnd", ""),
             "Submitted": int(f.get("Submitted", 0)),
             "Resolved": int(f.get("Resolved", 0)),
             "Open": int(f.get("Open", 0)),
@@ -282,17 +289,13 @@ def get_recent_metrics(token, site_id, list_id):
 # ==============================
 # SLACK
 # ==============================
-def format_date(date_str):
-    dt = pd.to_datetime(date_str)
-    return dt.strftime("%b %d, %Y")
-
 def build_slack_blocks(current, list_url):
     week_start_dt = pd.to_datetime(current["WeekStart"])
-    week_end_dt = week_start_dt + pd.Timedelta(days=6)
+    week_end_dt = pd.to_datetime(current["WeekEnd"])
 
     week_label = (
-        f"{week_start_dt.strftime('%b %d, %Y')} – "
-        f"{week_end_dt.strftime('%b %d, %Y')}"
+        f"{week_start_dt.strftime('%b %d, %Y %H:%M')} – "
+        f"{week_end_dt.strftime('%b %d, %Y %H:%M')} UTC"
     )
 
     return [
