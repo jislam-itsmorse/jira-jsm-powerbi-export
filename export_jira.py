@@ -122,9 +122,12 @@ def compute_weekly_metrics(df_activity, df_backlog):
 
     now = pd.Timestamp.now(tz="UTC")
 
-    days_since_last_friday = 7
-    last_friday = (now - pd.Timedelta(days=days_since_last_friday)).normalize() + pd.Timedelta(hours=12, minutes=1)
-    this_friday = now.normalize() + pd.Timedelta(hours=12)
+    # Find the most recent Friday (weekday 4), then set to 10:00 AM
+    days_since_last_friday = (now.weekday() - 4) % 7 or 7  # always go back at least 1 day
+    last_friday = (now - pd.Timedelta(days=days_since_last_friday)).normalize() + pd.Timedelta(hours=10)
+
+    # This Friday = last_friday + 7 days, at 10:00 AM
+    this_friday = last_friday + pd.Timedelta(days=7)
 
     window_start = last_friday
     window_end = this_friday
