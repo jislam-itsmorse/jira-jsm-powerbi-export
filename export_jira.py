@@ -294,17 +294,12 @@ def build_slack_blocks(current, list_url):
     week_start_dt = pd.to_datetime(current["WeekStart"])
     week_end_dt = pd.to_datetime(current["WeekEnd"])
 
-    week_label = (
-        f"{week_start_dt.strftime('%b %d, %Y %H:%M')} – "
-        f"{week_end_dt.strftime('%b %d, %Y %H:%M')} UTC"
-    )
-
     return [
         {
             "type": "header",
             "text": {
                 "type": "plain_text",
-                "text": f"📊 Weekly IT Report — {week_label}"
+                "text": f"📊 Weekly IT Report"
             }
         },
         {
